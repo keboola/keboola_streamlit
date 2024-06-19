@@ -10,43 +10,55 @@ To install KeboolaStreamlit, you can use `pip`:
 pip install keboola-streamlit
 ```
 
+
 ## Usage
 
-### Initialization
+### Import and Initialization
 
-Create an instance of the `KeboolaStreamlit` class with the required parameters:
+Create an instance of the `KeboolaStreamlit` class, and initialize it with the required parameters from Streamlit secrets:
 
 ```python
+import streamlit as st
 from keboola_streamlit import KeboolaStreamlit
 
-keboola = KeboolaStreamlit(root_url='https://connection.keboola.com', token='YOUR_API_TOKEN')
+TOKEN = st.secrets["STORAGE_API_TOKEN"]
+URL = st.secrets["KEBOOLA_HOSTNAME"]
+ROLE_ID = st.secrets["REQUIRED_ROLE_ID"]
+
+keboola = KeboolaStreamlit(root_url=URL, token=TOKEN)
 ```
 
-### Authentication Check
+### Authentication and Authorization
 
 Ensure that the user is authenticated and authorized to access the Streamlit app:
 
 ```python
-keboola.auth_check(required_role_id='YOUR_REQUIRED_ROLE_ID')
+keboola.auth_check(required_role_id=ROLE_ID)
 ```
 
-### Retrieve Data
-
-Fetch data from a Keboola Storage table and return it as a Pandas DataFrame:
+Add a logout button to your Streamlit app:
 
 ```python
-df = keboola.get_table(table_id='YOUR_TABLE_ID')
+keboola.logout_button(sidebar=True, use_container_width=True)
 ```
 
-### Load Data
+### Reading Data from Keboola Storage
 
-Load data from a Pandas DataFrame into a Keboola Storage table:
+Read data from a Keboola Storage table and return it as a Pandas DataFrame:
 
 ```python
-keboola.load_table(table_id='YOUR_TABLE_ID', df=your_dataframe, is_incremental=False)
+df = keboola.read_table(table_id='YOUR_TABLE_ID')
 ```
 
-### Create Event
+### Writing Data to Keboola Storage
+
+Write data from a Pandas DataFrame to a Keboola Storage table:
+
+```python
+keboola.write_table(table_id='YOUR_TABLE_ID', df=your_dataframe, is_incremental=False)
+```
+
+### Creating Events
 
 Create an event in Keboola Storage to log activities:
 
@@ -54,16 +66,14 @@ Create an event in Keboola Storage to log activities:
 keboola.create_event()
 ```
 
-### Add Keboola Table Selection
+### Add Table Selection
 
-Add a Keboola table selection form to your Streamlit app sidebar:
+Add a table selection interface in your Streamlit app:
 
 ```python
-selected_table_data = keboola.add_table_selection()
+df = keboola.add_table_selection(sidebar=True)
 ```
 
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for more details.
-
-
