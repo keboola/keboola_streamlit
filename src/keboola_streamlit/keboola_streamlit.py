@@ -53,31 +53,42 @@ class KeboolaStreamlit:
         """
         self.dev_mockup_headers = headers
 
-    def auth_check(self, required_role_id: str):
+    def auth_check(self, required_role_id: str, debug=False):
         """
         Checks the user's authentication and authorization based on the headers.
 
         Args:
             required_role_id (str): The required role ID for authorization.
+            debug (bool): Flag to show detailed debug information.
 
         Stops the Streamlit app if the user is not authorized.
         """
         headers = self._get_headers()
         
-        if 'X-Kbc-User-Email' in headers:
-            user_email = headers['X-Kbc-User-Email']
-            st.sidebar.write(f'Logged in as user: {user_email}')
-            st.sidebar.link_button('Logout', '/_proxy/sign_out', use_container_width=True)
-            with st.sidebar.expander('Show more'):
-                st.write(headers)
+        if 'X-Kbc-User-Roles' in headers:
+            if debug:
+                with st.sidebar.expander('Show more'):
+                    st.write(headers)
 
             user_roles = headers.get('X-Kbc-User-Roles', [])
             if required_role_id not in user_roles:
                 st.error("You are not authorised to use this app.")
                 st.stop()
         else:
-            st.write('Not using proxy.')
+            if debug:
+                st.info('Not using proxy.')
 
+    def logout_button(self, sidebar=True, use_container_width=True):
+        """
+        Adds a logout button to the Streamlit app.
+        """
+        headers = self._get_headers()
+        
+        container = st.sidebar if sidebar else st
+        if 'X-Kbc-User-Email' in headers:
+            user_email = headers['X-Kbc-User-Email']
+            container.write(f'Logged in as user: {user_email}')
+            container.link_button('Logout', '/_proxy/sign_out', use_container_width=use_container_width)
 
     def create_event(self, message: str = 'Streamlit App Create Event', endpoint: str = '/v2/storage/events/create', data: Optional[str] = None, jobId: Optional[int] = None):
         """
@@ -119,14 +130,12 @@ class KeboolaStreamlit:
     def get_event_job_id(self, table_id: str, operation_name: str):
         client = self._get_sapi_client()
         job_list = client.jobs.list()
-        job_id = ''
         for job in job_list:
             if job['tableId'] == table_id and job['operationName'] == operation_name:
-                job_id = job['id']
-                break
-        return job_id
+                return job['id']
+        return ''
     
-    def get_table(self, table_id: str, endpoint: str = '/v2/storage/tables/export_to_file') -> pd.DataFrame:
+    def read_table(self, table_id: str, endpoint: str = '/v2/storage/tables/export_to_file') -> pd.DataFrame:
         """
         Retrieves data from a Keboola Storage table and returns it as a Pandas DataFrame.
 
@@ -157,7 +166,7 @@ class KeboolaStreamlit:
             event_job_id = self.get_event_job_id(table_id=table_id, operation_name='tableExport')
             self.create_event(
                 jobId=event_job_id, 
-                message='Streamlit App Download Table', 
+                message='Streamlit App Read Table', 
                 endpoint=endpoint
             )
             return df
@@ -165,8 +174,7 @@ class KeboolaStreamlit:
             st.error(f'An error occurred while retrieving data: {str(e)}')
             return pd.DataFrame() 
 
-
-    def load_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False, endpoint: str = '/v2/storage/tables/load'):
+    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False, endpoint: str = '/v2/storage/tables/load'):
         """
         Load data into an existing table.
 
@@ -182,9 +190,10 @@ class KeboolaStreamlit:
             df.to_csv(csv_path, index=False)
             client.tables.load(table_id=table_id, file_path=csv_path, is_incremental=is_incremental)
             event_job_id = self.get_event_job_id(table_id=table_id, operation_name='tableImport')
+            
             self.create_event(
                 jobId=event_job_id, 
-                message='Streamlit App Load Table', 
+                message='Streamlit App Write Table', 
                 endpoint=endpoint,
                 data=df
             )
@@ -194,81 +203,79 @@ class KeboolaStreamlit:
             if os.path.exists(csv_path):
                 os.remove(csv_path)
 
-    def add_table_selection(self):
-        self._add_connection_form()
+    def add_table_selection(self, sidebar=True) -> pd.DataFrame:
+        self._add_connection_form(sidebar)
         if 'kbc_storage_client' in st.session_state:
-            self._add_bucket_form()
+            self._add_bucket_form(sidebar)
         if 'selected_bucket' in st.session_state and 'kbc_storage_client' in st.session_state:
-            self._add_table_form()
+            self._add_table_form(sidebar)
         if 'selected_table_id' in st.session_state and 'kbc_storage_client' in st.session_state:
             selected_table_id = st.session_state['selected_table_id']
             if 'tables_data' not in st.session_state:
                 st.session_state['tables_data'] = {}
             if selected_table_id not in st.session_state['tables_data']:
-                st.session_state['tables_data'][selected_table_id] = self.get_table(table_id=selected_table_id)
+                st.session_state['tables_data'][selected_table_id] = self.read_table(table_id=selected_table_id)
             return st.session_state['tables_data'][selected_table_id]
         return pd.DataFrame()
-    
 
-    def _add_connection_form(self):
-        with st.sidebar.form('Connection Details'):
-            if st.form_submit_button('Connect', use_container_width=True):
-                try:
-                    kbc_client = self._get_sapi_client()
+    def _add_connection_form(self, sidebar=True):
+        container = st.sidebar if sidebar else st
+        if container.button('Connect to Storage', use_container_width=True):
+            try:
+                kbc_client = self._get_sapi_client()
                     
-                    if 'kbc_storage_client' in st.session_state:
-                        st.session_state.pop('kbc_storage_client')
-                    if 'selected_table' in st.session_state:
-                        st.session_state.pop('selected_table')
-                    if 'selected_table_id' in st.session_state:
-                        st.session_state.pop('selected_table_id')
-                    if 'selected_bucket' in st.session_state:
-                        st.session_state.pop('selected_bucket')
-                    if 'uploaded_file' in st.session_state:
-                        st.session_state.pop('uploaded_file')
+                if 'kbc_storage_client' in st.session_state:
+                    st.session_state.pop('kbc_storage_client')
+                if 'selected_table' in st.session_state:
+                    st.session_state.pop('selected_table')
+                if 'selected_table_id' in st.session_state:
+                    st.session_state.pop('selected_table_id')
+                if 'selected_bucket' in st.session_state:
+                    st.session_state.pop('selected_bucket')
+                if 'uploaded_file' in st.session_state:
+                    st.session_state.pop('uploaded_file')
 
-                    if self._get_bucket_list(kbc_client):
-                        st.session_state['kbc_storage_client'] = kbc_client
-                        st.session_state['bucket_list'] = self._get_bucket_list(kbc_client)
-                
-                except Exception as e:
-                    st.error(f'Connection failed: {str(e)}')
-    
-    def _add_bucket_form(self):
-        with st.sidebar.form('Bucket Details'):
-            with st.header('Select a bucket from storage'):
+                if self._get_bucket_list(kbc_client):
+                    st.session_state['kbc_storage_client'] = kbc_client
+                    st.session_state['bucket_list'] = self._get_bucket_list(kbc_client)
+            except Exception as e:
+                st.error(f'Connection failed: {str(e)}')
+
+    def _add_bucket_form(self, sidebar=True):
+        container = st.sidebar if sidebar else st
+        with container.form('Bucket Details'):
+            with st.header('Select a bucket from Storage'):
                 bucket = st.selectbox('Bucket', self._get_buckets_from_bucket_list())
-            if st.form_submit_button('Select Bucket',use_container_width=True):
+            if st.form_submit_button('Select Bucket', use_container_width=True):
                 st.session_state['selected_bucket'] = bucket
 
-    def _add_table_form(self):
-        with st.sidebar.form('Table Details'):
+    def _add_table_form(self, sidebar=True):
+        container = st.sidebar if sidebar else st
+        with container.form('Table Details'):
             table_names, tables = self._get_tables(st.session_state['selected_bucket'])
             st.session_state['selected_table'] = st.selectbox('Table', table_names)
             table_id = tables[st.session_state['selected_table']]['id']
             if st.form_submit_button('Select table', use_container_width=True):
-                st.session_state['selected_table_id'] = table_id 
+                st.session_state['selected_table_id'] = table_id
 
-    def _get_bucket_list(self, kbc_storage_client):
+    def _get_bucket_list(self, kbc_storage_client) -> List[dict]:
         try:
-            project_bucket_list = kbc_storage_client.buckets.list()
-            return project_bucket_list
+            return kbc_storage_client.buckets.list()
         except HTTPError:
             st.error('Invalid Connection settings')
 
-    def _get_buckets_from_bucket_list(self):
+    def _get_buckets_from_bucket_list(self) -> List[str]:
         try:
             return [bucket['id'] for bucket in st.session_state['bucket_list']]
         except Exception:
             st.error('Could not list buckets')
+            return []
 
-    def _get_tables(self, bucket_id: str) -> Tuple[List, Dict]:
+    def _get_tables(self, bucket_id: str) -> Tuple[List[str], Dict[str, dict]]:
         try:
-            tables = {}
-            for table in st.session_state['kbc_storage_client'].buckets.list_tables(bucket_id):
-                tables[table['name']] = table
-            table_names = list(tables.keys())
-            return table_names, tables
+            tables = {table['name']: table for table in st.session_state['kbc_storage_client'].buckets.list_tables(bucket_id)}
+            return list(tables.keys()), tables
         except Exception as e:
             st.error('Could not list tables')
             st.error(e)
+            return [], {}

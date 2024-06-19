@@ -140,4 +140,7 @@ dmypy.json
 # Ignore .streamlit directory
 .streamlit/
 
+# Ignore tmp directory
+tmp
+
 src/test.py
