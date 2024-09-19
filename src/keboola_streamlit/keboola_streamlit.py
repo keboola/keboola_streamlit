@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 import datetime
 import os
+import csv
 
 from kbcstorage.client import Client
 from requests.exceptions import HTTPError
@@ -19,9 +20,9 @@ class KeboolaStreamlit:
             token (str): The API token for accessing Keboola Storage.
             tmp_data_folder (str): The temporary data folder for storing files locally.
         """
-        self.client = Client(root_url, token)
-        self.token = token
-        self.root_url = root_url
+        self.__client = Client(root_url, token)
+        self.__token = token
+        self.__root_url = root_url.strip('/')
         self.dev_mockup_headers = None
         self.tmp_data_folder = tmp_data_folder
 
@@ -34,15 +35,13 @@ class KeboolaStreamlit:
         """
         headers = _get_websocket_headers()
         return headers if 'X-Kbc-User-Email' in headers else (self.dev_mockup_headers or {})
-
-    def _get_sapi_client(self):
-        """
-        Getter for the Keboola Storage API client.
-
-        Returns:
-            Client: The Keboola Storage API client.
-        """
-        return self.client
+    
+    def _get_event_job_id(self, table_id: str, operation_name: str):
+        job_list = self.__client.jobs.list()
+        for job in job_list:
+            if job.get('tableId') == table_id and job.get('operationName') == operation_name:
+                return job.get('id')
+        return None
 
     def set_dev_mockup_headers(self, headers: dict):
         """
@@ -77,6 +76,8 @@ class KeboolaStreamlit:
         else:
             if debug:
                 st.info('Not using proxy.')
+            st.error("Authentication headers are missing. You are not authorized to use this app.")
+            st.stop()
 
     def logout_button(self, sidebar=True, use_container_width=True):
         """
@@ -90,91 +91,85 @@ class KeboolaStreamlit:
             container.write(f'Logged in as user: {user_email}')
             container.link_button('Logout', '/_proxy/sign_out', use_container_width=use_container_width)
 
-    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: str = '/v2/storage/events/create', data: Optional[str] = None, jobId: Optional[int] = None):
+    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: str = None, 
+                     event_data: Optional[str] = None, jobId: Optional[int] = None, 
+                     event_type: str = 'keboola_data_app_create_event'):
         """
         Creates an event in Keboola Storage.
 
         Args:
-            jobId (int): The job ID for the event.
             message (str): The message for the event.
-            data (str): The data associated with the event.
             endpoint (str): The endpoint for the event.
+            data (Optional[str]): The data associated with the event.
+            jobId (Optional[int]): The job ID for the event.
+            event_type (str): The type of the event. Defaults to 'keboola_data_app_create_event'.
         """
         headers = self._get_headers()
-        url = f'{self.root_url}/v2/storage/events'
+        url = f'{self.__root_url}/v2/storage/events'
         requestHeaders = {
             'Content-Type': 'application/json',
-            'X-StorageApi-Token': self.token
+            'X-StorageApi-Token': self.__token
         }
         requestData = {
             'message': message,
             'component': 'keboola.data-apps',
             'params': {
                 'user': headers.get('X-Kbc-User-Email', 'Unknown'),
-                'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'endpoint': endpoint,
-                'event_type': 'keboola_data_app_write',
+                'time': datetime.datetime.now(datetime.timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S'),
+                'endpoint': endpoint or url,
+                'event_type': event_type,
                 'event_application': headers.get('Origin', 'Unknown')
             }
         }
         
-        if data is not None:
-            requestData['params']['event_data'] = {'data': f'{data}'}
+        if event_data is not None:
+            requestData['params']['event_data'] = {'data': f'{event_data}'}
 
         if jobId is not None:
             requestData['params']['event_job_id'] = jobId
 
         response = requests.post(url, headers=requestHeaders, json=requestData)
         return response.status_code, response.text
-    
-    def get_event_job_id(self, table_id: str, operation_name: str):
-        client = self._get_sapi_client()
-        job_list = client.jobs.list()
-        for job in job_list:
-            if job['tableId'] == table_id and job['operationName'] == operation_name:
-                return job['id']
-        return ''
-    
-    def read_table(self, table_id: str, endpoint: str = '/v2/storage/tables/export_to_file') -> pd.DataFrame:
+        
+    def read_table(self, table_id: str) -> pd.DataFrame:
         """
         Retrieves data from a Keboola Storage table and returns it as a Pandas DataFrame.
 
         Args:
-            table_id (str): The ID of the table to retrieve data from.
-            endpoint (str): The endpoint for retrieving table details.
-
+            table_id (str): The ID of the table to retrieve data from.            
         Returns:
             pd.DataFrame: The table data as a Pandas DataFrame.
         """
-        client = self._get_sapi_client()
+        client = self.__client
         try:
             table_detail = client.tables.detail(table_id)
             table_name = table_detail['name']
-            if not os.path.exists(self.tmp_data_folder):
-                os.makedirs(self.tmp_data_folder)
-
-            client.tables.export_to_file(table_id=table_id, path_name=self.tmp_data_folder)
             
-            csv_path = os.path.join(self.tmp_data_folder, f'{table_name}.csv')
-            if os.path.exists(csv_path):
-                os.remove(csv_path)
+            client.tables.export_to_file(table_id=table_id, path_name='')
+            
+            with open('./' + table_name, mode='rt', encoding='utf-8') as in_file:
+                lazy_lines = (line.replace('\0', '') for line in in_file)
+                reader = csv.reader(lazy_lines, lineterminator='\n')
 
-            exported_file_path = os.path.join(self.tmp_data_folder, table_name)
-            os.rename(exported_file_path, csv_path)
-            df = pd.read_csv(csv_path)
+            if os.path.exists(f'{table_name}.csv'):
+                os.remove(f'{table_name}.csv')
 
-            event_job_id = self.get_event_job_id(table_id=table_id, operation_name='tableExport')
+            os.rename(table_name, f'{table_name}.csv')
+            df = pd.read_csv(f'{table_name}.csv')
+
+            event_job_id = self._get_event_job_id(table_id=table_id, operation_name='tableExport')
             self.create_event(
-                jobId=event_job_id, 
                 message='Streamlit App Read Table', 
-                endpoint=endpoint
+                endpoint='{}/v2/storage/tables/{}/export-async'.format(self.__root_url, table_id),
+                jobId=event_job_id, 
+                event_type='keboola_data_app_read_table'
             )
             return df
         except Exception as e:
             st.error(f'An error occurred while retrieving data: {str(e)}')
             return pd.DataFrame() 
 
-    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False, endpoint: str = '/v2/storage/tables/load'):
+    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False):
         """
         Load data into an existing table.
 
@@ -182,20 +177,26 @@ class KeboolaStreamlit:
             table_id (str): The ID of the table to load data into.
             df (pd.DataFrame): The DataFrame containing the data to be loaded.
             is_incremental (bool): Whether to load incrementally (do not truncate the table). Defaults to False.
-            endpoint (str): The endpoint for loading data.
         """
-        client = self._get_sapi_client()
-        csv_path = f'{table_id}.csv'
+        client = self.__client
+        csv_path = f'{table_id}.csv.gz'
+        
         try:
-            df.to_csv(csv_path, index=False)
-            client.tables.load(table_id=table_id, file_path=csv_path, is_incremental=is_incremental)
-            event_job_id = self.get_event_job_id(table_id=table_id, operation_name='tableImport')
+            df.to_csv(csv_path, index=False, compression='gzip')
             
-            self.create_event(
-                jobId=event_job_id, 
+            client.tables.load(
+                table_id=table_id, 
+                file_path=csv_path, 
+                is_incremental=is_incremental
+            )
+            event_job_id = self._get_event_job_id(table_id=table_id, operation_name='tableImport')
+            
+            self.create_event( 
                 message='Streamlit App Write Table', 
-                endpoint=endpoint,
-                data=df
+                endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
+                event_data=df,
+                jobId=event_job_id,
+                event_type='keboola_data_app_write_table'
             )
         except Exception as e:
             st.error(f'Data upload failed with: {str(e)}')
@@ -204,11 +205,20 @@ class KeboolaStreamlit:
                 os.remove(csv_path)
 
     def add_table_selection(self, sidebar=True) -> pd.DataFrame:
-        self._add_connection_form(sidebar)
+        """
+        Adds a table selection form to the Streamlit app.
+        
+        Args:
+            sidebar (bool): Flag to display the form in the sidebar. Defaults to True.
+        Returns:
+            pd.DataFrame: The selected table data as a Pandas DataFrame.
+        """
+        container = st.sidebar if sidebar else st
+        self._add_connection_form(container)
         if 'kbc_storage_client' in st.session_state:
-            self._add_bucket_form(sidebar)
+            self._add_bucket_form(container)
         if 'selected_bucket' in st.session_state and 'kbc_storage_client' in st.session_state:
-            self._add_table_form(sidebar)
+            self._add_table_form(container)
         if 'selected_table_id' in st.session_state and 'kbc_storage_client' in st.session_state:
             selected_table_id = st.session_state['selected_table_id']
             if 'tables_data' not in st.session_state:
@@ -218,11 +228,11 @@ class KeboolaStreamlit:
             return st.session_state['tables_data'][selected_table_id]
         return pd.DataFrame()
 
-    def _add_connection_form(self, sidebar=True):
-        container = st.sidebar if sidebar else st
+    def _add_connection_form(self, container):
+        
         if container.button('Connect to Storage', use_container_width=True):
             try:
-                kbc_client = self._get_sapi_client()
+                kbc_client = self.__client
                     
                 if 'kbc_storage_client' in st.session_state:
                     st.session_state.pop('kbc_storage_client')
@@ -241,22 +251,28 @@ class KeboolaStreamlit:
             except Exception as e:
                 st.error(f'Connection failed: {str(e)}')
 
-    def _add_bucket_form(self, sidebar=True):
-        container = st.sidebar if sidebar else st
+    def _add_bucket_form(self, container):
         with container.form('Bucket Details'):
-            with st.header('Select a bucket from Storage'):
-                bucket = st.selectbox('Bucket', self._get_buckets_from_bucket_list())
-            if st.form_submit_button('Select Bucket', use_container_width=True):
-                st.session_state['selected_bucket'] = bucket
+            buckets = self._get_buckets_from_bucket_list()
+            if not buckets:
+                st.warning("No buckets found in the storage.")
+                st.form_submit_button('Select Bucket', disabled=True, use_container_width=True)
+            else:
+                bucket = st.selectbox('Bucket', buckets)
+                if st.form_submit_button('Select Bucket', use_container_width=True):
+                    st.session_state['selected_bucket'] = bucket
 
-    def _add_table_form(self, sidebar=True):
-        container = st.sidebar if sidebar else st
+    def _add_table_form(self, container):
         with container.form('Table Details'):
             table_names, tables = self._get_tables(st.session_state['selected_bucket'])
-            st.session_state['selected_table'] = st.selectbox('Table', table_names)
-            table_id = tables[st.session_state['selected_table']]['id']
-            if st.form_submit_button('Select table', use_container_width=True):
-                st.session_state['selected_table_id'] = table_id
+            if not table_names:
+                st.warning("No tables found in the selected bucket.")
+                st.form_submit_button('Select table', disabled=True, use_container_width=True)
+            else:
+                st.session_state['selected_table'] = st.selectbox('Table', table_names)
+                table_id = tables[st.session_state['selected_table']]['id']
+                if st.form_submit_button('Select table', use_container_width=True):
+                    st.session_state['selected_table_id'] = table_id
 
     def _get_bucket_list(self, kbc_storage_client) -> List[dict]:
         try:

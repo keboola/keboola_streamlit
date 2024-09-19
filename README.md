@@ -21,8 +21,8 @@ Create an instance of the `KeboolaStreamlit` class, and initialize it with the r
 import streamlit as st
 from keboola_streamlit import KeboolaStreamlit
 
+URL = st.secrets["KEBOOLA_URL"]
 TOKEN = st.secrets["STORAGE_API_TOKEN"]
-URL = st.secrets["KEBOOLA_HOSTNAME"]
 ROLE_ID = st.secrets["REQUIRED_ROLE_ID"]
 
 keboola = KeboolaStreamlit(root_url=URL, token=TOKEN)
@@ -63,15 +63,23 @@ keboola.write_table(table_id='YOUR_TABLE_ID', df=your_dataframe, is_incremental=
 Create an event in Keboola Storage to log activities:
 
 ```python
-keboola.create_event()
+keboola.create_event(message="Custom Event Message", event_type="custom_event")
 ```
 
-### Add Table Selection
+### Table Selection
 
 Add a table selection interface in your Streamlit app:
 
 ```python
 df = keboola.add_table_selection(sidebar=True)
+```
+
+### Logout Button
+
+Add a logout button to your app:
+
+```python
+keboola.logout_button()
 ```
 
 ## License
