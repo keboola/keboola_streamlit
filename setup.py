@@ -5,7 +5,7 @@ with open("README.md", "r") as f:
 
 setuptools.setup(
     name='keboola_streamlit',
-    version='0.0.5',
+    version='0.0.6',
     author="pandyandy",
     setup_requires=['pytest-runner', 'flake8'],
     tests_require=['pytest'],
