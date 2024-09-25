@@ -13,7 +13,7 @@ setuptools.setup(
         'pygelf',
         'pytz',
         'deprecated',
-        'streamlit',
+        'streamlit>=1.37.0',
         'pandas',
         'kbcstorage'
     ],
