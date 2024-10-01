@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keboola_streamlit"
+version = "0.0.7"
+dependencies = [
+    "streamlit>=1.37.0",
+    "pandas",
+    "kbcstorage",
+    "deprecated",
+]
+requires-python = ">=3.7"
+authors = [
+    {name = "pandyandy", email = "andrea.novakova@keboola.com"},
+    {name = "yustme", email = "vojta.tuma@keboola.com"},
+]
+description = "A Python library that simplifies Keboola SAPI integration in Streamlit apps."
+readme = "README.md"
+license = {text = "MIT License"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Repository = "https://github.com/keboola/keboola_streamlit/tree/main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
