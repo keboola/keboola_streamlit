@@ -4,14 +4,17 @@ import requests
 import datetime
 import os
 import csv
+import logging
 
 from kbcstorage.client import Client
 from requests.exceptions import HTTPError
 from typing import Dict, List, Tuple, Optional
-from streamlit.web.server.websocket_headers import _get_websocket_headers
+
+# Configure logging
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class KeboolaStreamlit:
-    def __init__(self, root_url: str, token: str, tmp_data_folder: str = 'tmp/'):
+    def __init__(self, root_url: str, token: str):
         """
         Initializes the KeboolaStreamlit class with the provided parameters.
 
@@ -24,7 +27,6 @@ class KeboolaStreamlit:
         self.__token = token
         self.__root_url = root_url.strip('/')
         self.dev_mockup_headers = None
-        self.tmp_data_folder = tmp_data_folder
 
     def _get_headers(self) -> dict:
         """
@@ -36,14 +38,28 @@ class KeboolaStreamlit:
         headers = st.context.headers
         return headers if 'X-Kbc-User-Email' in headers else (self.dev_mockup_headers or {})
     
-    def _get_event_job_id(self, table_id: str, operation_name: str):
-        job_list = self.__client.jobs.list()
-        for job in job_list:
-            if job.get('tableId') == table_id and job.get('operationName') == operation_name:
-                return job.get('id')
-        return None
+    def _get_event_job_id(self, table_id: str, operation_name: str) -> Optional[int]:
+        """
+        Retrieves the job ID for a specific table and operation.
 
-    def set_dev_mockup_headers(self, headers: dict):
+        Args:
+            table_id (str): The ID of the table.
+            operation_name (str): The name of the operation.
+
+        Returns:
+            Optional[int]: The job ID if found, otherwise None.
+        """
+        try:
+            job_list = self.__client.jobs.list()
+            for job in job_list:
+                if job.get('tableId') == table_id and job.get('operationName') == operation_name:
+                    return job.get('id')
+            return None
+        except Exception as e:
+            logging.error(f"Failed to get event job ID for table {table_id} and operation {operation_name}: {e}")
+            return None
+
+    def set_dev_mockup_headers(self, headers: dict) -> None:
         """
         Sets the development mock headers for local development.
 
@@ -52,9 +68,9 @@ class KeboolaStreamlit:
         """
         self.dev_mockup_headers = headers
 
-    def auth_check(self, required_role_id: str, debug=False):
+    def auth_check(self, required_role_id: str, debug: bool = False) -> None:
         """
-        Checks the user's authentication and authorization based on the headers.
+        Checks the user's authorization based on the headers.
 
         Args:
             required_role_id (str): The required role ID for authorization.
@@ -79,9 +95,13 @@ class KeboolaStreamlit:
             st.error("Authentication headers are missing. You are not authorized to use this app.")
             st.stop()
 
-    def logout_button(self, sidebar=True, use_container_width=True):
+    def logout_button(self, sidebar: bool = True, use_container_width: bool = True) -> None:
         """
         Adds a logout button to the Streamlit app.
+
+        Args:
+            sidebar (bool): Flag to display the button in the sidebar. Defaults to True.
+            use_container_width (bool): Flag to use the container width for the button. Defaults to True.
         """
         headers = self._get_headers()
         
@@ -91,18 +111,21 @@ class KeboolaStreamlit:
             container.write(f'Logged in as user: {user_email}')
             container.link_button('Logout', '/_proxy/sign_out', use_container_width=use_container_width)
 
-    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: str = None, 
+    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None, 
                      event_data: Optional[str] = None, jobId: Optional[int] = None, 
-                     event_type: str = 'keboola_data_app_create_event'):
+                     event_type: str = 'keboola_data_app_create_event') -> Tuple[Optional[int], Optional[str]]:
         """
         Creates an event in Keboola Storage.
 
         Args:
             message (str): The message for the event.
             endpoint (str): The endpoint for the event.
-            data (Optional[str]): The data associated with the event.
+            event_data (Optional[str]): The data associated with the event.
             jobId (Optional[int]): The job ID for the event.
             event_type (str): The type of the event. Defaults to 'keboola_data_app_create_event'.
+
+        Returns:
+            Tuple[int, str]: The response status code and response text.
         """
         headers = self._get_headers()
         url = f'{self.__root_url}/v2/storage/events'
@@ -124,12 +147,20 @@ class KeboolaStreamlit:
         
         if event_data is not None:
             requestData['params']['event_data'] = {'data': f'{event_data}'}
-
         if jobId is not None:
             requestData['params']['event_job_id'] = jobId
 
-        response = requests.post(url, headers=requestHeaders, json=requestData)
-        return response.status_code, response.text
+        try:
+            response = requests.post(url, headers=requestHeaders, json=requestData)
+            response.raise_for_status()
+            return response.status_code, response.text
+        except HTTPError as http_err:
+            logging.error(f"HTTP error occurred while creating event: {http_err}")
+            st.error(f"HTTP error occurred while creating event: {http_err}")
+        except Exception as err:
+            logging.error(f"An error occurred while creating event: {err}")
+            st.error(f"An error occurred while creating event: {err}")
+        return None, None
         
     def read_table(self, table_id: str) -> pd.DataFrame:
         """
@@ -165,11 +196,15 @@ class KeboolaStreamlit:
                 event_type='keboola_data_app_read_table'
             )
             return df
-        except Exception as e:
-            st.error(f'An error occurred while retrieving data: {str(e)}')
-            return pd.DataFrame() 
+        except HTTPError as http_err:
+            logging.error(f"HTTP error occurred while reading table {table_id}: {http_err}")
+            st.error(f"HTTP error occurred while reading table {table_id}: {http_err}")
+        except Exception as err:
+            logging.error(f"An error occurred while reading table {table_id}: {err}")
+            st.error(f"An error occurred while reading table {table_id}: {err}")
+        return pd.DataFrame() 
 
-    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False):
+    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False) -> None:
         """
         Load data into an existing table.
 
@@ -198,18 +233,23 @@ class KeboolaStreamlit:
                 jobId=event_job_id,
                 event_type='keboola_data_app_write_table'
             )
-        except Exception as e:
-            st.error(f'Data upload failed with: {str(e)}')
+        except HTTPError as http_err:
+            logging.error(f"HTTP error occurred while writing to table {table_id}: {http_err}")
+            st.error(f"HTTP error occurred while writing to table {table_id}: {http_err}")
+        except Exception as err:
+            logging.error(f"An error occurred while writing to table {table_id}: {err}")
+            st.error(f"An error occurred while writing to table {table_id}: {err}")
         finally:
             if os.path.exists(csv_path):
                 os.remove(csv_path)
 
-    def add_table_selection(self, sidebar=True) -> pd.DataFrame:
+    def add_table_selection(self, sidebar: bool = True) -> pd.DataFrame:
         """
         Adds a table selection form to the Streamlit app.
         
         Args:
             sidebar (bool): Flag to display the form in the sidebar. Defaults to True.
+
         Returns:
             pd.DataFrame: The selected table data as a Pandas DataFrame.
         """
@@ -228,8 +268,13 @@ class KeboolaStreamlit:
             return st.session_state['tables_data'][selected_table_id]
         return pd.DataFrame()
 
-    def _add_connection_form(self, container):
-        
+    def _add_connection_form(self, container: st.delta_generator.DeltaGenerator) -> None:
+        """
+        Adds a connection form.
+
+        Args:
+            container: Determined by the sidebar argument in the add_table_selection function.
+        """
         if container.button('Connect to Storage', use_container_width=True):
             try:
                 kbc_client = self.__client
@@ -248,10 +293,20 @@ class KeboolaStreamlit:
                 if self._get_bucket_list(kbc_client):
                     st.session_state['kbc_storage_client'] = kbc_client
                     st.session_state['bucket_list'] = self._get_bucket_list(kbc_client)
-            except Exception as e:
-                st.error(f'Connection failed: {str(e)}')
+            except HTTPError as http_err:
+                logging.error(f"HTTP error occurred while connecting to storage: {http_err}")
+                st.error(f"HTTP error occurred while connecting to storage: {http_err}")
+            except Exception as err:
+                logging.error(f"An error occurred while connecting to storage: {err}")
+                st.error(f"An error occurred while connecting to storage: {err}")
 
-    def _add_bucket_form(self, container):
+    def _add_bucket_form(self, container: st.delta_generator.DeltaGenerator) -> None:
+        """
+        Adds a bucket selection.
+
+        Args:
+            container: Determined by the sidebar argument in the add_table_selection function.
+        """
         with container.form('Bucket Details'):
             buckets = self._get_buckets_from_bucket_list()
             if not buckets:
@@ -262,7 +317,13 @@ class KeboolaStreamlit:
                 if st.form_submit_button('Select Bucket', use_container_width=True):
                     st.session_state['selected_bucket'] = bucket
 
-    def _add_table_form(self, container):
+    def _add_table_form(self, container: st.delta_generator.DeltaGenerator) -> None:
+        """
+        Adds a table selection.
+
+        Args:
+            container: Determined by the sidebar argument in the add_table_selection function.
+        """
         with container.form('Table Details'):
             table_names, tables = self._get_tables(st.session_state['selected_bucket'])
             if not table_names:
@@ -274,24 +335,56 @@ class KeboolaStreamlit:
                 if st.form_submit_button('Select table', use_container_width=True):
                     st.session_state['selected_table_id'] = table_id
 
-    def _get_bucket_list(self, kbc_storage_client) -> List[dict]:
+    def _get_bucket_list(self, kbc_storage_client: Client) -> List[dict]:
+        """
+        Retrieves the list of buckets from Keboola Storage.
+
+        Args:
+            kbc_storage_client: The Keboola Storage client.
+
+        Returns:
+            List[dict]: The list of buckets.
+        """
         try:
             return kbc_storage_client.buckets.list()
-        except HTTPError:
-            st.error('Invalid Connection settings')
+        except HTTPError as http_err:
+            logging.error(f"HTTP error occurred while retrieving bucket list: {http_err}")
+            st.error(f"HTTP error occurred while retrieving bucket list: {http_err}")
+        except Exception as err:
+            logging.error(f"An error occurred while retrieving bucket list: {err}")
+            st.error(f"An error occurred while retrieving bucket list: {err}")
 
     def _get_buckets_from_bucket_list(self) -> List[str]:
+        """
+        Retrieves the list of bucket IDs from the session state.
+
+        Returns:
+            List[str]: The list of bucket IDs.
+        """
         try:
             return [bucket['id'] for bucket in st.session_state['bucket_list']]
-        except Exception:
-            st.error('Could not list buckets')
+        except Exception as err:
+            logging.error(f"Could not list buckets: {err}")
+            st.error(f"Could not list buckets: {err}")
             return []
 
     def _get_tables(self, bucket_id: str) -> Tuple[List[str], Dict[str, dict]]:
+        """
+        Retrieves the list of tables from a specific bucket.
+
+        Args:
+            bucket_id (str): The ID of the bucket.
+
+        Returns:
+            Tuple[List[str], Dict[str, dict]]: A tuple containing the list of table names and a dictionary of table details.
+        """
         try:
             tables = {table['name']: table for table in st.session_state['kbc_storage_client'].buckets.list_tables(bucket_id)}
             return list(tables.keys()), tables
-        except Exception as e:
-            st.error('Could not list tables')
-            st.error(e)
+        except HTTPError as http_err:
+            logging.error(f"HTTP error occurred while retrieving tables from bucket {bucket_id}: {http_err}")
+            st.error(f"HTTP error occurred while retrieving tables from bucket {bucket_id}: {http_err}")
+        except Exception as err:
+            logging.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {err}")
+            st.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {err}")
             return [], {}
