@@ -2,3 +2,5 @@ streamlit>=1.37.0
 pandas
 kbcstorage
 deprecated
+pytest
+pytest-mock
