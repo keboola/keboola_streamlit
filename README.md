@@ -83,3 +83,44 @@ df = keboola.add_table_selection(sidebar=True)
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for more details.
+
+## Testing
+
+This project includes a suite of unit tests to ensure the functionality of the KeboolaStreamlit class. The tests are located in the `tests/test_keboola_streamlit.py` file.
+
+### Running Tests
+
+To run the tests, follow these steps:
+
+1. Ensure you have installed the required dependencies, including `pytest` and `pytest-mock`. You can install them using:
+
+   ```bash
+   pip install pytest pytest-mock
+   ```
+
+2. Navigate to the root directory of the project in your terminal.
+
+3. Run the tests using the following command:
+
+   ```bash
+   pytest tests/test_keboola_streamlit.py
+   ```
+
+### Test Coverage
+
+The tests cover various aspects of the KeboolaStreamlit class, including:
+
+- Initialization
+- Setting development mockup headers
+- Authentication checks
+- Event creation
+- Table reading and writing
+- Table selection functionality
+
+### Writing New Tests
+
+If you're contributing to this project and adding new features, please ensure you also add corresponding tests. Follow the existing test structure in the `test_keboola_streamlit.py` file as a guide.
+
+## Contributing
+
+Contributions to KeboolaStreamlit are welcome! Please ensure that any pull requests include appropriate tests for new functionality or bug fixes.
