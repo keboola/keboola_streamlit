@@ -64,6 +64,7 @@ def test_write_table(mock_client, keboola_instance):
         mock_to_csv.assert_called_once()
         mock_client.return_value.tables.load.assert_called_once()
 
+
 @patch('streamlit.sidebar.button')
 @patch('keboola_streamlit.keboola_streamlit.Client')
 def test_add_table_selection(mock_client, mock_button, keboola_instance):
