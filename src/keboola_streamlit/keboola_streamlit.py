@@ -8,7 +8,7 @@ import logging
 
 from kbcstorage.client import Client
 from requests.exceptions import HTTPError
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Any, Tuple, Optional, Sequence
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -370,3 +370,81 @@ class KeboolaStreamlit:
             logging.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {e}")
             st.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {e}")
             return [], {}
+     
+    def init_snowflake_connection(self, connection_name: str = 'snowflake'):
+        """
+        Initializes a connection to Snowflake Workspace.
+
+        Args:
+            connection_name (str): The name of the connection in secrets.toml file. Defaults to 'snowflake'.
+        """
+        conn = st.connection(connection_name)
+        self.create_event(message='Streamlit App Init Snowflake Connection', event_type='keboola_data_app_init_snowflake_connection')
+        return conn
+    
+    def load_snowflake_table(self, conn, table_name: str) -> pd.DataFrame:
+        """
+        Loads a table from Snowflake Workspace.
+
+        Args:
+            conn: The Snowflake connection object.
+            table_name (str): The name of the table to load.
+
+        Returns:
+            pd.DataFrame: The table data as a Pandas DataFrame.
+        """
+        session = conn.session()
+        self.create_event(message='Streamlit App Load Snowflake Table', event_type='keboola_data_app_load_snowflake_table', event_data=table_name)
+        return session.table(table_name).to_pandas()
+
+    def query_snowflake(self, conn, query: str, ttl: int = 600) -> pd.DataFrame:
+        """
+        Queries a table from Snowflake Workspace.
+
+        Args:
+            conn: The Snowflake connection object.
+            query (str): The SQL query to execute.
+            ttl (int): The time-to-live for the query in seconds. Defaults to 600 seconds (10 minutes).
+
+        Returns:
+            pd.DataFrame: The query results as a Pandas DataFrame.
+        """
+        df = conn.query(query, ttl=ttl)
+        self.create_event(message='Streamlit App Query Snowflake', event_type='keboola_data_app_query_snowflake', event_data=query)
+        return df
+    
+    def write_snowflake_table(self, conn, df: pd.DataFrame, table_name: str, auto_create_table: bool = False, overwrite: bool = False) -> None:
+        """
+        Writes a DataFrame to a table in Snowflake Workspace.
+
+        Args:
+            conn: The Snowflake connection object.
+            df (pd.DataFrame): The DataFrame to write to the table.
+            table_name (str): The name of the table to write to.
+            auto_create_table (bool): Whether to automatically create the table if it doesn't exist. Defaults to False.
+            overwrite (bool): Whether to overwrite the table if it exists. Defaults to False.
+
+        Returns:
+            None
+        """
+        session = conn.session()
+        snowpark_df = session.write_pandas(df, table_name, auto_create_table=auto_create_table, overwrite=overwrite)
+        self.create_event(message='Streamlit App Write Snowflake Table', event_type='keboola_data_app_write_snowflake_table', event_data=table_name)
+        return snowpark_df
+    
+    def execute_snowflake_query(self, conn, query: str, params: Optional[Sequence[Any]] = None) -> pd.DataFrame:
+        """
+        Executes a SQL query on Snowflake Workspace and returns the result as a Pandas DataFrame.
+
+        Args:
+            conn: The Snowflake connection object.
+            query (str): The SQL query to execute.
+            params (Optional[Sequence[Any]]): The parameters to bind to the query. Defaults to None.
+
+        Returns:
+            pd.DataFrame: The query results as a Pandas DataFrame.
+        """
+        session = conn.session()
+        snowflake_df = session.sql(query, params=params)
+        self.create_event(message='Streamlit App Execute Snowflake Query', event_type='keboola_data_app_execute_snowflake_query', event_data=query)
+        return snowflake_df.collect()
