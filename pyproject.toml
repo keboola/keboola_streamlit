@@ -10,6 +10,7 @@ dependencies = [
     "pandas",
     "kbcstorage",
     "deprecated",
+    "snowflake-snowpark-python"
 ]
 requires-python = ">=3.7"
 authors = [
