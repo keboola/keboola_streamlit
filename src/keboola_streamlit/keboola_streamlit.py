@@ -1,12 +1,12 @@
 import streamlit as st
 import pandas as pd
 import requests
-import datetime
 import os
 import re
 import csv
 import logging
 
+from datetime import datetime, timezone
 from kbcstorage.client import Client
 from requests.exceptions import HTTPError
 from typing import Dict, List, Any, Tuple, Optional, Sequence
@@ -143,7 +143,7 @@ class KeboolaStreamlit:
             'component': 'keboola.data-apps',
             'params': {
                 'user': headers.get('X-Kbc-User-Email', 'Unknown'),
-                'time': datetime.datetime.now(datetime.timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S'),
+                'time': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
                 'endpoint': endpoint or url,
                 'event_type': event_type,
                 'event_application': event_application
@@ -156,7 +156,7 @@ class KeboolaStreamlit:
                 requestData['params']['application_id'] = match.group(1)
         
         if event_data is not None:
-            requestData['params']['event_data'] = {'event_data': f'{event_data}'}
+            requestData['params']['event_data'] = event_data
         if job_id is not None:
             requestData['params']['event_job_id'] = job_id
 
@@ -422,7 +422,7 @@ class KeboolaStreamlit:
             logging.error(f"An error occurred while loading Snowflake table {table_id}: {e}")
             st.error(f"An error occurred while loading Snowflake table {table_id}: {e}")
             return pd.DataFrame()
-        
+
     def snowflake_query(self, session: Session, query: str, params: Optional[Sequence[Any]] = None) -> pd.DataFrame:
         """
         Executes a SQL query on Snowflake Workspace and returns the result as a Pandas DataFrame.
@@ -446,14 +446,14 @@ class KeboolaStreamlit:
 
     def snowflake_write_table(self, session: Session, df: pd.DataFrame, table_id: str, auto_create_table: bool = False, overwrite: bool = False) -> None:
         """
-        Writes a DataFrame to a table in Snowflake Workspace.
+        Writes a DataFrame to a specified table in the Snowflake Workspace.
 
         Args:
-            session: The Snowflake connection object.
-            df (pd.DataFrame): The DataFrame to write to the table.
-            table_name (str): The name of the table to write to.
-            auto_create_table (bool): Whether to automatically create the table if it doesn't exist. Defaults to False.
-            overwrite (bool): Whether to overwrite the table if it exists. Defaults to False.
+            session (Session): The Snowflake connection object used for the operation.
+            df (pd.DataFrame): The DataFrame containing data to be written to the table.
+            table_id (str): The identifier of the table where data will be written.
+            auto_create_table (bool): If True, automatically creates the table if it does not exist. Defaults to False.
+            overwrite (bool): If True, overwrites the table if it already exists. Defaults to False.
 
         Returns:
             None
@@ -461,6 +461,8 @@ class KeboolaStreamlit:
         try:
             snowpark_df = session.write_pandas(df, table_id, auto_create_table=auto_create_table, overwrite=overwrite)
             self.create_event(message='Streamlit App Snowflake Write Table', event_type='keboola_data_app_snowflake_write_table', event_data=f'table_id: {table_id}')
+            return snowpark_df
         except Exception as e:
             logging.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
             st.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
+            return None
