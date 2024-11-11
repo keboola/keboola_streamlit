@@ -37,8 +37,10 @@ class KeboolaStreamlit:
         Returns:
             dict: The headers for the current request.
         """
-        headers = st.context.headers
-        return headers if 'X-Kbc-User-Email' in headers else (self.dev_mockup_headers or {})
+        if self.dev_mockup_headers is not None:
+            return self.dev_mockup_headers
+        else:
+            return st.context.headers
     
     def _get_event_job_id(self, table_id: str, operation_name: str) -> Optional[int]:
         """
@@ -135,7 +137,7 @@ class KeboolaStreamlit:
             'Content-Type': 'application/json',
             'X-StorageApi-Token': self.__token
         }
-        event_application = headers.get('X-Forwarded-Host', 'Unknown')
+        event_application = headers.get('Origin', 'Unknown')
         requestData = {
             'message': message,
             'component': 'keboola.data-apps',
@@ -154,7 +156,7 @@ class KeboolaStreamlit:
                 requestData['params']['application_id'] = match.group(1)
         
         if event_data is not None:
-            requestData['params']['event_data'] = {'data': f'{event_data}'}
+            requestData['params']['event_data'] = {'event_data': f'{event_data}'}
         if job_id is not None:
             requestData['params']['event_job_id'] = job_id
 
@@ -394,14 +396,14 @@ class KeboolaStreamlit:
                 "schema": st.secrets['SNOWFLAKE_SCHEMA'],
             }
             session = Session.builder.configs(connection_parameters).create()
-            self.create_event(message='Streamlit App Init Snowflake Connection', event_type='keboola_data_app_init_snowflake_connection')
+            self.create_event(message='Streamlit App Snowflake Init Connection', event_type='keboola_data_app_snowflake_init')
             return session
         except Exception as e:
             logging.error(f"An error occurred while initializing Snowflake connection: {e}")
             st.error(f"An error occurred while initializing Snowflake connection: {e}")
             return None
 
-    def snowflake_load_table(self, session: Session, table_id: str) -> pd.DataFrame:
+    def snowflake_read_table(self, session: Session, table_id: str) -> pd.DataFrame:
         """
         Loads a table from Snowflake Workspace.
 
@@ -414,7 +416,7 @@ class KeboolaStreamlit:
         """
         try:
             df = session.table(table_id).to_pandas()
-            self.create_event(message='Streamlit App Load Snowflake Table', event_type='keboola_data_app_load_snowflake_table', event_data=table_id)
+            self.create_event(message='Streamlit App Snowflake Read Table', event_type='keboola_data_app_snowflake_read_table', event_data=f'table_id: {table_id}')
             return df
         except Exception as e:
             logging.error(f"An error occurred while loading Snowflake table {table_id}: {e}")
@@ -435,7 +437,7 @@ class KeboolaStreamlit:
         """
         try:
             snowflake_df = session.sql(query, params=params).collect()
-            self.create_event(message='Streamlit App Execute Snowflake Query', event_type='keboola_data_app_execute_snowflake_query', event_data=query)
+            self.create_event(message='Streamlit App Snowflake Query', event_type='keboola_data_app_snowflake_query', event_data=f'Query: {query}')
             return snowflake_df
         except Exception as e:
             logging.error(f"An error occurred while executing Snowflake query: {e}")
@@ -458,7 +460,7 @@ class KeboolaStreamlit:
         """
         try:
             snowpark_df = session.write_pandas(df, table_id, auto_create_table=auto_create_table, overwrite=overwrite)
-            self.create_event(message='Streamlit App Write Snowflake Table', event_type='keboola_data_app_write_snowflake_table', event_data=table_id)
+            self.create_event(message='Streamlit App Snowflake Write Table', event_type='keboola_data_app_snowflake_write_table', event_data=f'table_id: {table_id}')
         except Exception as e:
             logging.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
             st.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
