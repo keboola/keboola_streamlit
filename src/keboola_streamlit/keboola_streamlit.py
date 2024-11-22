@@ -7,11 +7,11 @@ import csv
 import logging
 
 from kbcstorage.client import Client
-from requests.exceptions import HTTPError
 from typing import Dict, List, Tuple, Optional
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 class KeboolaStreamlit:
     def __init__(self, root_url: str, token: str):
@@ -37,7 +37,7 @@ class KeboolaStreamlit:
         """
         headers = st.context.headers
         return headers if 'X-Kbc-User-Email' in headers else (self.dev_mockup_headers or {})
-    
+
     def _get_event_job_id(self, table_id: str, operation_name: str) -> Optional[int]:
         """
         Retrieves the job ID for a specific table and operation.
@@ -79,7 +79,7 @@ class KeboolaStreamlit:
         Stops the Streamlit app if the user is not authorized.
         """
         headers = self._get_headers()
-        
+
         if 'X-Kbc-User-Roles' in headers:
             if debug:
                 with st.sidebar.expander('Show more'):
@@ -104,15 +104,15 @@ class KeboolaStreamlit:
             use_container_width (bool): Flag to use the container width for the button. Defaults to True.
         """
         headers = self._get_headers()
-        
+
         container = st.sidebar if sidebar else st
         if 'X-Kbc-User-Email' in headers:
             user_email = headers['X-Kbc-User-Email']
             container.write(f'Logged in as user: {user_email}')
             container.link_button('Logout', '/_proxy/sign_out', use_container_width=use_container_width)
 
-    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None, 
-                     event_data: Optional[str] = None, jobId: Optional[int] = None, 
+    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None,
+                     event_data: Optional[str] = None, jobId: Optional[int] = None,
                      event_type: str = 'keboola_data_app_create_event') -> Tuple[Optional[int], Optional[str]]:
         """
         Creates an event in Keboola Storage.
@@ -144,7 +144,7 @@ class KeboolaStreamlit:
                 'event_application': headers.get('Origin', 'Unknown')
             }
         }
-        
+
         if event_data is not None:
             requestData['params']['event_data'] = {'data': f'{event_data}'}
         if jobId is not None:
@@ -158,13 +158,13 @@ class KeboolaStreamlit:
             logging.error(f"An error occurred while creating event: {e}")
             st.error(f"An error occurred while creating event: {e}")
         return None, None
-        
+
     def read_table(self, table_id: str) -> pd.DataFrame:
         """
         Retrieves data from a Keboola Storage table and returns it as a Pandas DataFrame.
 
         Args:
-            table_id (str): The ID of the table to retrieve data from.            
+            table_id (str): The ID of the table to retrieve data from.
         Returns:
             pd.DataFrame: The table data as a Pandas DataFrame.
         """
@@ -172,12 +172,14 @@ class KeboolaStreamlit:
         try:
             table_detail = client.tables.detail(table_id)
             table_name = table_detail['name']
-            
+
             client.tables.export_to_file(table_id=table_id, path_name='')
-            
+
             with open('./' + table_name, mode='rt', encoding='utf-8') as in_file:
                 lazy_lines = (line.replace('\0', '') for line in in_file)
                 reader = csv.reader(lazy_lines, lineterminator='\n')
+                data = list(reader)
+                df = pd.DataFrame(data[1:], columns=data[0])
 
             if os.path.exists(f'{table_name}.csv'):
                 os.remove(f'{table_name}.csv')
@@ -187,16 +189,16 @@ class KeboolaStreamlit:
 
             event_job_id = self._get_event_job_id(table_id=table_id, operation_name='tableExport')
             self.create_event(
-                message='Streamlit App Read Table', 
+                message='Streamlit App Read Table',
                 endpoint='{}/v2/storage/tables/{}/export-async'.format(self.__root_url, table_id),
-                jobId=event_job_id, 
+                jobId=event_job_id,
                 event_type='keboola_data_app_read_table'
             )
             return df
         except Exception as e:
             logging.error(f"An error occurred while reading table {table_id}: {e}")
             st.error(f"An error occurred while reading table {table_id}: {e}")
-        return pd.DataFrame() 
+        return pd.DataFrame()
 
     def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False) -> None:
         """
@@ -209,19 +211,19 @@ class KeboolaStreamlit:
         """
         client = self.__client
         csv_path = f'{table_id}.csv.gz'
-        
+
         try:
             df.to_csv(csv_path, index=False, compression='gzip')
-            
+
             client.tables.load(
-                table_id=table_id, 
-                file_path=csv_path, 
+                table_id=table_id,
+                file_path=csv_path,
                 is_incremental=is_incremental
             )
             event_job_id = self._get_event_job_id(table_id=table_id, operation_name='tableImport')
-            
-            self.create_event( 
-                message='Streamlit App Write Table', 
+
+            self.create_event(
+                message='Streamlit App Write Table',
                 endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
                 event_data=df,
                 jobId=event_job_id,
@@ -237,7 +239,7 @@ class KeboolaStreamlit:
     def add_table_selection(self, sidebar: bool = True) -> pd.DataFrame:
         """
         Adds a table selection form to the Streamlit app.
-        
+
         Args:
             sidebar (bool): Flag to display the form in the sidebar. Defaults to True.
 
@@ -269,7 +271,7 @@ class KeboolaStreamlit:
         if container.button('Connect to Storage', use_container_width=True):
             try:
                 kbc_client = self.__client
-                    
+
                 if 'kbc_storage_client' in st.session_state:
                     st.session_state.pop('kbc_storage_client')
                 if 'selected_table' in st.session_state:
@@ -361,10 +363,14 @@ class KeboolaStreamlit:
             bucket_id (str): The ID of the bucket.
 
         Returns:
-            Tuple[List[str], Dict[str, dict]]: A tuple containing the list of table names and a dictionary of table details.
+            Tuple[List[str], Dict[str, dict]]:
+            A tuple containing the list of table names and a dictionary of table details.
         """
         try:
-            tables = {table['name']: table for table in st.session_state['kbc_storage_client'].buckets.list_tables(bucket_id)}
+            tables = {
+                table['name']: table
+                for table in st.session_state['kbc_storage_client'].buckets.list_tables(bucket_id)
+            }
             return list(tables.keys()), tables
         except Exception as e:
             logging.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {e}")

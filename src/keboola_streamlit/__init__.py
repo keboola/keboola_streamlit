@@ -1,1 +1,1 @@
-from .keboola_streamlit import KeboolaStreamlit
+from .keboola_streamlit import KeboolaStreamlit  # noqa: F401
