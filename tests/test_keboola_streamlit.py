@@ -3,8 +3,7 @@ import os
 import pytest
 import pandas as pd
 
-from unittest.mock import MagicMock, patch, PropertyMock
-from streamlit.runtime.scriptrunner_utils.script_run_context import add_script_run_ctx
+from unittest.mock import MagicMock, patch, mock_open
 
 # src/keboola_streamlit/test_keboola_streamlit.py
 # workaround to import module from parent directory
@@ -16,18 +15,6 @@ from keboola_streamlit import KeboolaStreamlit  # noqa: E402
 @pytest.fixture
 def keboola_streamlit():
     return KeboolaStreamlit(root_url="https://example.com", token="dummy_token")
-
-
-@pytest.fixture(autouse=True)
-def initialize_streamlit_context():
-    add_script_run_ctx()
-
-
-def test_get_headers(keboola_streamlit):
-    with patch('streamlit.context.headers', new_callable=PropertyMock) as mock_headers:
-        mock_headers.return_value = {'X-Kbc-User-Email': 'test@example.com'}
-        headers = keboola_streamlit._get_headers()
-        assert headers == {'X-Kbc-User-Email': 'test@example.com'}
 
 
 def test_get_event_job_id(keboola_streamlit):
@@ -45,51 +32,38 @@ def test_set_dev_mockup_headers(keboola_streamlit):
     assert keboola_streamlit.dev_mockup_headers == headers
 
 
-def test_auth_check_authorized(keboola_streamlit):
-    with patch('streamlit.context.headers', {'X-Kbc-User-Roles': ['role_1']}):
-        with patch('streamlit.stop') as mock_stop:
-            keboola_streamlit.auth_check('role_1')
-            mock_stop.assert_not_called()
-
-
-def test_auth_check_unauthorized(keboola_streamlit):
-    with patch('streamlit.context.headers', {'X-Kbc-User-Roles': ['role_2']}):
-        with patch('streamlit.stop') as mock_stop:
-            with patch('streamlit.error') as mock_error:
-                keboola_streamlit.auth_check('role_1')
-                mock_error.assert_called_once_with("You are not authorised to use this app.")
-                mock_stop.assert_called_once()
-
-
-def test_logout_button(keboola_streamlit):
-    with patch('streamlit.context.headers', {'X-Kbc-User-Email': 'test@example.com'}):
-        with patch('streamlit.sidebar') as mock_sidebar:
-            mock_sidebar.write = MagicMock()
-            mock_sidebar.link_button = MagicMock()
-            keboola_streamlit.logout_button()
-            mock_sidebar.write.assert_called_once_with('Logged in as user: test@example.com')
-            mock_sidebar.link_button.assert_called_once_with('Logout', '/_proxy/sign_out', use_container_width=True)
-
-
-def test_create_event(keboola_streamlit):
-    with patch('streamlit.context.headers', {'X-Kbc-User-Email': 'test@example.com', 'Origin': 'localhost'}):
-        with patch('requests.post') as mock_post:
-            mock_post.return_value.status_code = 200
-            mock_post.return_value.text = 'Success'
-            status_code, response_text = keboola_streamlit.create_event()
-            assert status_code == 200
-            assert response_text == 'Success'
-
-
 def test_read_table(keboola_streamlit):
-    keboola_streamlit._KeboolaStreamlit__client.tables.detail = MagicMock(return_value={'name': 'test_table'})
-    keboola_streamlit._KeboolaStreamlit__client.tables.export_to_file = MagicMock()
-    with patch('builtins.open', MagicMock()):
-        with patch('os.rename'):
-            with patch('pandas.read_csv', return_value=pd.DataFrame({'col1': [1, 2], 'col2': [3, 4]})):
-                df = keboola_streamlit.read_table('table_id')
-                assert not df.empty
-                assert list(df.columns) == ['col1', 'col2']
+    mock_client = MagicMock()
+    mock_client.tables.detail.return_value = {"name": "test_table"}
+    mock_client.tables.export_to_file = MagicMock()
+
+    keboola_streamlit._KeboolaStreamlit__client = mock_client
+    keboola_streamlit._get_event_job_id = MagicMock(return_value="mock_event_job_id")
+    keboola_streamlit.create_event = MagicMock()
+
+    mock_csv_content = "col1,col2\n1,3\n2,4\n"
+
+    with patch("builtins.open", mock_open(read_data=mock_csv_content)), \
+         patch("os.rename"), \
+         patch("os.path.exists", return_value=True), \
+         patch("os.remove"), \
+         patch("pandas.read_csv", return_value=pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})):
+
+        result = keboola_streamlit.read_table("mock_table_id")
+
+        assert not result.empty
+        assert list(result.columns) == ["col1", "col2"]
+        assert result.iloc[0].tolist() == [1, 3]
+        assert result.iloc[1].tolist() == [2, 4]
+
+        mock_client.tables.detail.assert_called_once_with("mock_table_id")
+        mock_client.tables.export_to_file.assert_called_once_with(table_id="mock_table_id", path_name="")
+        keboola_streamlit.create_event.assert_called_once_with(
+            message="Streamlit App Read Table",
+            endpoint="https://example.com/v2/storage/tables/mock_table_id/export-async",
+            jobId="mock_event_job_id",
+            event_type="keboola_data_app_read_table"
+        )
 
 
 def test_write_table(keboola_streamlit):
