@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
 import requests
-import datetime
 import os
 import re
-import pytz
 import csv
 import logging
 
+from datetime import datetime
 from kbcstorage.client import Client
 from typing import Dict, List, Tuple, Optional
 
@@ -143,7 +142,7 @@ class KeboolaStreamlit:
             'component': 'keboola.data-apps',
             'params': {
                 'user': headers.get('X-Kbc-User-Email', 'Unknown'),
-                'time': datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S'),
+                'time': datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'),
                 'endpoint': endpoint or url,
                 'event_type': event_type,
                 'event_application': event_application
