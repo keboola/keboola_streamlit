@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 import datetime
 import os
+import re
+import pytz
 import csv
 import logging
 
@@ -35,9 +37,11 @@ class KeboolaStreamlit:
         Returns:
             dict: The headers for the current request.
         """
-        headers = st.context.headers
-        return headers if 'X-Kbc-User-Email' in headers else (self.dev_mockup_headers or {})
-
+        if self.dev_mockup_headers is not None:
+            return self.dev_mockup_headers
+        else:
+            return st.context.headers
+    
     def _get_event_job_id(self, table_id: str, operation_name: str) -> Optional[int]:
         """
         Retrieves the job ID for a specific table and operation.
@@ -111,8 +115,8 @@ class KeboolaStreamlit:
             container.write(f'Logged in as user: {user_email}')
             container.link_button('Logout', '/_proxy/sign_out', use_container_width=use_container_width)
 
-    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None,
-                     event_data: Optional[str] = None, jobId: Optional[int] = None,
+    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None, 
+                     event_data: Optional[str] = None, job_id: Optional[int] = None,
                      event_type: str = 'keboola_data_app_create_event') -> Tuple[Optional[int], Optional[str]]:
         """
         Creates an event in Keboola Storage.
@@ -121,7 +125,7 @@ class KeboolaStreamlit:
             message (str): The message for the event.
             endpoint (str): The endpoint for the event.
             event_data (Optional[str]): The data associated with the event.
-            jobId (Optional[int]): The job ID for the event.
+            job_id (Optional[int]): The job ID for the event.
             event_type (str): The type of the event. Defaults to 'keboola_data_app_create_event'.
 
         Returns:
@@ -133,22 +137,28 @@ class KeboolaStreamlit:
             'Content-Type': 'application/json',
             'X-StorageApi-Token': self.__token
         }
+        event_application = headers.get('Origin', 'Unknown')
         requestData = {
             'message': message,
             'component': 'keboola.data-apps',
             'params': {
                 'user': headers.get('X-Kbc-User-Email', 'Unknown'),
-                'time': datetime.datetime.now(datetime.timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M:%S'),
+                'time': datetime.now(pytz.utc).strftime('%Y-%m-%d %H:%M:%S'),
                 'endpoint': endpoint or url,
                 'event_type': event_type,
-                'event_application': headers.get('Origin', 'Unknown')
+                'event_application': event_application
             }
         }
 
+        if event_application != 'Unknown':
+            match = re.search(r'https://.*-(\d+)\.', event_application)
+            if match:
+                requestData['params']['application_id'] = match.group(1)
+        
         if event_data is not None:
-            requestData['params']['event_data'] = {'data': f'{event_data}'}
-        if jobId is not None:
-            requestData['params']['event_job_id'] = jobId
+            requestData['params']['event_data'] = event_data
+        if job_id is not None:
+            requestData['params']['event_job_id'] = job_id
 
         try:
             response = requests.post(url, headers=requestHeaders, json=requestData)
@@ -191,7 +201,7 @@ class KeboolaStreamlit:
             self.create_event(
                 message='Streamlit App Read Table',
                 endpoint='{}/v2/storage/tables/{}/export-async'.format(self.__root_url, table_id),
-                jobId=event_job_id,
+                job_id=event_job_id,
                 event_type='keboola_data_app_read_table'
             )
             return df
@@ -226,7 +236,7 @@ class KeboolaStreamlit:
                 message='Streamlit App Write Table',
                 endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
                 event_data=df,
-                jobId=event_job_id,
+                job_id=event_job_id,
                 event_type='keboola_data_app_write_table'
             )
         except Exception as e:
