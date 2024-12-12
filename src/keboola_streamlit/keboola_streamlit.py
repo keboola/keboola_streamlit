@@ -6,7 +6,6 @@ import re
 import csv
 import logging
 
-from datetime import datetime
 from kbcstorage.client import Client
 from typing import Dict, List, Tuple, Optional
 
@@ -142,7 +141,6 @@ class KeboolaStreamlit:
             'component': 'keboola.data-apps',
             'params': {
                 'user': headers.get('X-Kbc-User-Email', 'Unknown'),
-                'time': datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S'),
                 'endpoint': endpoint or url,
                 'event_type': event_type,
                 'event_application': event_application
@@ -155,7 +153,7 @@ class KeboolaStreamlit:
                 requestData['params']['application_id'] = match.group(1)
         
         if event_data is not None:
-            requestData['params']['event_data'] = event_data
+            requestData['params']['event_data'] = f'{event_data}'
         if job_id is not None:
             requestData['params']['event_job_id'] = job_id
 
