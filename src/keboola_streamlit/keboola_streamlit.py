@@ -7,7 +7,8 @@ import csv
 import logging
 
 from kbcstorage.client import Client
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Any, Tuple, Optional, Sequence
+from snowflake.snowpark import Session
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -383,3 +384,91 @@ class KeboolaStreamlit:
             logging.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {e}")
             st.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {e}")
             return [], {}
+
+    def snowflake_create_session_object(self) -> Session:
+        """
+        Creates a Snowflake session.
+        """
+        connection_parameters = {
+            "user": st.secrets['SNOWFLAKE_USER'],
+            "password": st.secrets['SNOWFLAKE_PASSWORD'],
+            "account": st.secrets['SNOWFLAKE_ACCOUNT'],
+            "role": st.secrets['SNOWFLAKE_ROLE'],
+            "warehouse": st.secrets['SNOWFLAKE_WAREHOUSE'],
+            "database": st.secrets['SNOWFLAKE_DATABASE'],
+            "schema": st.secrets['SNOWFLAKE_SCHEMA'],
+        }
+        session = None
+        try:
+            session = Session.builder.configs(connection_parameters).create()
+            self.create_event(message='Streamlit App Snowflake Create Session Object', event_type='keboola_data_app_snowflake_create_session_object')
+        except Exception as e:
+            logging.error(f"An error occurred while creating Snowflake session: {e}")
+            st.error(f"An error occurred while creating Snowflake session: {e}")
+        return session
+
+    def snowflake_read_table(self, session: Session, table_id: str) -> pd.DataFrame:
+        """
+        Loads a table from Snowflake Workspace.
+
+        Args:
+            session: The Snowflake connection object.
+            table_id (str): The ID of the table to load.
+
+        Returns:
+            pd.DataFrame: The table data as a Pandas DataFrame.
+        """
+        try:
+            df_snowflake = session.table(table_id).to_pandas()
+            self.create_event(message='Streamlit App Snowflake Read Table', event_type='keboola_data_app_snowflake_read_table', event_data=f'table_id: {table_id}')
+            return df_snowflake
+        except Exception as e:
+            logging.error(f"An error occurred while loading Snowflake table {table_id}: {e}")
+            st.error(f"An error occurred while loading Snowflake table {table_id}: {e}")
+            return pd.DataFrame()
+
+    def snowflake_execute_query(self, session: Session, query: str, params: Optional[Sequence[Any]] = None, return_df: bool = True) -> Optional[pd.DataFrame]:
+        """
+        Executes a SQL query on Snowflake Workspace.
+
+        Args:
+            session: The Snowflake connection object.
+            query (str): The SQL query to execute.
+            params (Optional[Sequence[Any]]): The parameters to bind to the query. Defaults to None.
+            return_df (bool): Flag to indicate whether to return the result as a Pandas DataFrame. Defaults to True.
+
+        Returns:
+            Optional[pd.DataFrame]: The query results as a Pandas DataFrame if return_df is True, otherwise None.
+        """
+        try:
+            if return_df:
+                snowflake_df = session.sql(query, params=params).collect()
+                self.create_event(message='Streamlit App Snowflake Query', event_type='keboola_data_app_snowflake_query', event_data=f'Query: {query}')
+                return snowflake_df
+            session.sql(query, params=params).collect()  # Execute the query without returning a DataFrame
+            self.create_event(message='Streamlit App Snowflake Query Executed', event_type='keboola_data_app_snowflake_query', event_data=f'Query executed: {query}')
+        except Exception as e:
+            logging.error(f"An error occurred while executing Snowflake query: {e}")
+            st.error(f"An error occurred while executing Snowflake query: {e}")
+        return None
+
+    def snowflake_write_table(self, session: Session, df: pd.DataFrame, table_id: str, auto_create_table: bool = False, overwrite: bool = False) -> None:
+        """
+        Writes a DataFrame to a specified table in the Snowflake Workspace.
+
+        Args:
+            session (Session): The Snowflake connection object used for the operation.
+            df (pd.DataFrame): The DataFrame containing data to be written to the table.
+            table_id (str): The identifier of the table where data will be written.
+            auto_create_table (bool): If True, automatically creates the table if it does not exist. Defaults to False.
+            overwrite (bool): If True, overwrites the table if it already exists. Defaults to False.
+
+        Returns:
+            None
+        """
+        try:
+            session.write_pandas(df, table_id, auto_create_table=auto_create_table, overwrite=overwrite)
+            self.create_event(message='Streamlit App Snowflake Write Table', event_type='keboola_data_app_snowflake_write_table', event_data=f'table_id: {table_id}')
+        except Exception as e:
+            logging.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
+            st.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
