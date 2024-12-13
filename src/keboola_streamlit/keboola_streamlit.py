@@ -40,7 +40,7 @@ class KeboolaStreamlit:
             return self.dev_mockup_headers
         else:
             return st.context.headers
-    
+
     def _get_event_job_id(self, table_id: str, operation_name: str) -> Optional[int]:
         """
         Retrieves the job ID for a specific table and operation.
@@ -114,7 +114,7 @@ class KeboolaStreamlit:
             container.write(f'Logged in as user: {user_email}')
             container.link_button('Logout', '/_proxy/sign_out', use_container_width=use_container_width)
 
-    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None, 
+    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None,
                      event_data: Optional[str] = None, job_id: Optional[int] = None,
                      event_type: str = 'keboola_data_app_create_event') -> Tuple[Optional[int], Optional[str]]:
         """
@@ -152,7 +152,7 @@ class KeboolaStreamlit:
             match = re.search(r'https://.*-(\d+)\.', event_application)
             if match:
                 requestData['params']['application_id'] = match.group(1)
-        
+
         if event_data is not None:
             requestData['params']['event_data'] = f'{event_data}'
         if job_id is not None:
@@ -401,7 +401,10 @@ class KeboolaStreamlit:
         session = None
         try:
             session = Session.builder.configs(connection_parameters).create()
-            self.create_event(message='Streamlit App Snowflake Create Session Object', event_type='keboola_data_app_snowflake_create_session_object')
+            self.create_event(
+                message='Streamlit App Snowflake Create Session Object',
+                event_type='keboola_data_app_snowflake_create_session_object'
+            )
         except Exception as e:
             logging.error(f"An error occurred while creating Snowflake session: {e}")
             st.error(f"An error occurred while creating Snowflake session: {e}")
@@ -420,14 +423,24 @@ class KeboolaStreamlit:
         """
         try:
             df_snowflake = session.table(table_id).to_pandas()
-            self.create_event(message='Streamlit App Snowflake Read Table', event_type='keboola_data_app_snowflake_read_table', event_data=f'table_id: {table_id}')
+            self.create_event(
+                message='Streamlit App Snowflake Read Table',
+                event_type='keboola_data_app_snowflake_read_table',
+                event_data=f'table_id: {table_id}'
+            )
             return df_snowflake
         except Exception as e:
             logging.error(f"An error occurred while loading Snowflake table {table_id}: {e}")
             st.error(f"An error occurred while loading Snowflake table {table_id}: {e}")
             return pd.DataFrame()
 
-    def snowflake_execute_query(self, session: Session, query: str, params: Optional[Sequence[Any]] = None, return_df: bool = True) -> Optional[pd.DataFrame]:
+    def snowflake_execute_query(
+        self,
+        session: Session,
+        query: str,
+        params: Optional[Sequence[Any]] = None,
+        return_df: bool = True
+    ) -> Optional[pd.DataFrame]:
         """
         Executes a SQL query on Snowflake Workspace.
 
@@ -443,16 +456,31 @@ class KeboolaStreamlit:
         try:
             if return_df:
                 snowflake_df = session.sql(query, params=params).collect()
-                self.create_event(message='Streamlit App Snowflake Query', event_type='keboola_data_app_snowflake_query', event_data=f'Query: {query}')
+                self.create_event(
+                    message='Streamlit App Snowflake Query',
+                    event_type='keboola_data_app_snowflake_query',
+                    event_data=f'Query: {query}'
+                )
                 return snowflake_df
             session.sql(query, params=params).collect()  # Execute the query without returning a DataFrame
-            self.create_event(message='Streamlit App Snowflake Query Executed', event_type='keboola_data_app_snowflake_query', event_data=f'Query executed: {query}')
+            self.create_event(
+                message='Streamlit App Snowflake Query Executed',
+                event_type='keboola_data_app_snowflake_query',
+                event_data=f'Query executed: {query}'
+            )
         except Exception as e:
             logging.error(f"An error occurred while executing Snowflake query: {e}")
             st.error(f"An error occurred while executing Snowflake query: {e}")
         return None
 
-    def snowflake_write_table(self, session: Session, df: pd.DataFrame, table_id: str, auto_create_table: bool = False, overwrite: bool = False) -> None:
+    def snowflake_write_table(
+        self,
+        session: Session,
+        df: pd.DataFrame,
+        table_id: str,
+        auto_create_table: bool = False,
+        overwrite: bool = False
+    ) -> None:
         """
         Writes a DataFrame to a specified table in the Snowflake Workspace.
 
@@ -468,7 +496,11 @@ class KeboolaStreamlit:
         """
         try:
             session.write_pandas(df, table_id, auto_create_table=auto_create_table, overwrite=overwrite)
-            self.create_event(message='Streamlit App Snowflake Write Table', event_type='keboola_data_app_snowflake_write_table', event_data=f'table_id: {table_id}')
+            self.create_event(
+                message='Streamlit App Snowflake Write Table',
+                event_type='keboola_data_app_snowflake_write_table',
+                event_data=f'table_id: {table_id}'
+            )
         except Exception as e:
             logging.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
             st.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
