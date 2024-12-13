@@ -61,7 +61,7 @@ def test_read_table(keboola_streamlit):
         keboola_streamlit.create_event.assert_called_once_with(
             message="Streamlit App Read Table",
             endpoint="https://example.com/v2/storage/tables/mock_table_id/export-async",
-            jobId="mock_event_job_id",
+            job_id="mock_event_job_id",
             event_type="keboola_data_app_read_table"
         )
 
