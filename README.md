@@ -80,6 +80,52 @@ Add a table selection interface in your app:
 df = keboola.add_table_selection(sidebar=True)
 ```
 
+### Snowflake Integration
+
+#### Creating a Snowflake Session
+
+To interact with Snowflake, first create a session using your Streamlit secrets. Ensure that the following secrets are set in your Streamlit configuration:
+
+- `SNOWFLAKE_USER`
+- `SNOWFLAKE_PASSWORD`
+- `SNOWFLAKE_ACCOUNT`
+- `SNOWFLAKE_ROLE`
+- `SNOWFLAKE_WAREHOUSE`
+- `SNOWFLAKE_DATABASE`
+- `SNOWFLAKE_SCHEMA`
+
+Then, create the session as follows:
+
+```python
+st.session_state['snowflake_session'] = keboola.
+snowflake_create_session_object()
+```
+
+#### Reading Data from Snowflake
+
+Load a table from Snowflake into a Pandas DataFrame:
+
+```python
+df_snowflake = keboola.snowflake_read_table(session=st.session_state['snowflake_session'], table_id='YOUR_SNOWFLAKE_TABLE_ID')
+```
+
+#### Executing a Snowflake Query
+
+Execute a SQL query on Snowflake and optionally return the results as a DataFrame:
+
+```python
+query = "SELECT * FROM YOUR_SNOWFLAKE_TABLE"
+df_query_result = keboola.snowflake_execute_query(session=st.session_state['snowflake_session'], query=query, return_df=True)
+```
+
+#### Writing Data to Snowflake
+
+Write a Pandas DataFrame to a Snowflake table:
+
+```python
+keboola.snowflake_write_table(session=st.session_state['snowflake_session'], df=your_dataframe, table_id='YOUR_SNOWFLAKE_TABLE_ID', auto_create_table=True, overwrite=True)
+```
+
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for more details.
