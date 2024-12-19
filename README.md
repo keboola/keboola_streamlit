@@ -97,8 +97,7 @@ To interact with Snowflake, first create a session using your Streamlit secrets.
 Then, create the session as follows:
 
 ```python
-st.session_state['snowflake_session'] = keboola.
-snowflake_create_session_object()
+st.session_state['snowflake_session'] = keboola.snowflake_create_session_object()
 ```
 
 #### Reading Data from Snowflake
@@ -123,7 +122,7 @@ df_query_result = keboola.snowflake_execute_query(session=st.session_state['snow
 Write a Pandas DataFrame to a Snowflake table:
 
 ```python
-keboola.snowflake_write_table(session=st.session_state['snowflake_session'], df=your_dataframe, table_id='YOUR_SNOWFLAKE_TABLE_ID', auto_create_table=True, overwrite=True)
+keboola.snowflake_write_table(session=st.session_state['snowflake_session'], df=your_dataframe, table_id='YOUR_SNOWFLAKE_TABLE_ID')
 ```
 
 ## License
