@@ -28,6 +28,7 @@ class KeboolaStreamlit:
         self.__token = token
         self.__root_url = root_url.strip('/')
         self.dev_mockup_headers = None
+        self.aggrid_license_key = os.environ.get('AGGRID_LICENSE_KEY')
 
     def _get_headers(self) -> dict:
         """
