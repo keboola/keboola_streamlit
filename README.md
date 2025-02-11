@@ -46,6 +46,8 @@ Add a logout button to your app:
 keboola.logout_button(sidebar=True, use_container_width=True)
 ```
 
+💡 _You can find more about authorization settings in Keboola [here](https://help.keboola.com/components/data-apps/#authorization)._
+
 ### Reading Data from Keboola Storage
 
 Read data from a Keboola Storage table and return it as a Pandas DataFrame:
