@@ -5,6 +5,7 @@ import os
 import re
 import csv
 import logging
+import uuid
 
 from kbcstorage.client import Client
 from typing import Dict, List, Any, Tuple, Optional, Sequence
@@ -219,7 +220,10 @@ class KeboolaStreamlit:
             is_incremental (bool): Whether to load incrementally (do not truncate the table). Defaults to False.
         """
         client = self.__client
-        csv_path = f'{table_id}.csv.gz'
+
+        table_name = table_id.split('.')[-1]
+        unique_id = uuid.uuid4()
+        csv_path = f'{table_name}_{unique_id}.csv.gz'
 
         try:
             df.to_csv(csv_path, index=False, compression='gzip')
