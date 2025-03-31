@@ -450,21 +450,24 @@ class KeboolaStreamlit:
             "schema": st.secrets["SNOWFLAKE_SCHEMA"],
         }
 
-        if st.secrets["SNOWFLAKE_PRIVATE_KEY"] and st.secrets["SNOWFLAKE_PASSWORD"]:
-            mess = "Both SNOWFLAKE_PRIVATE_KEY and SNOWFLAKE_PASSWORD are set. Using SNOWFLAKE_PRIVATE_KEY."
-            logging.warning(mess)
-            st.warning(mess)
-            connection_parameters["private_key"] = st.secrets["SNOWFLAKE_PRIVATE_KEY"]
-
         if st.secrets["SNOWFLAKE_PRIVATE_KEY"]:
             connection_parameters["private_key"] = st.secrets["SNOWFLAKE_PRIVATE_KEY"]
             connection_parameters["private_key_passphrase"] = st.secrets[
                 "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"
             ]
 
-        if st.secrets["SNOWFLAKE_PASSWORD"]:
+        if st.secrets["SNOWFLAKE_PASSWORD"] and not st.secrets["SNOWFLAKE_PRIVATE_KEY"]:
             connection_parameters["password"] = st.secrets["SNOWFLAKE_PASSWORD"]
             return connection_parameters, "password"
+
+        if st.secrets["SNOWFLAKE_PRIVATE_KEY"] and st.secrets["SNOWFLAKE_PASSWORD"]:
+            mess = "Both SNOWFLAKE_PRIVATE_KEY and SNOWFLAKE_PASSWORD are set. Using SNOWFLAKE_PRIVATE_KEY."
+            logging.warning(mess)
+            st.warning(mess)
+            connection_parameters["private_key"] = st.secrets["SNOWFLAKE_PRIVATE_KEY"]
+            connection_parameters["private_key_passphrase"] = st.secrets[
+                "SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"
+            ]
 
         return connection_parameters, "private_key"
 
