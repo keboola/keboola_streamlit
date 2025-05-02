@@ -45,11 +45,9 @@ def test_read_table(keboola_streamlit):
 
     mock_csv_content = "col1,col2\n1,3\n2,4\n"
 
-    with patch("builtins.open", mock_open(read_data=mock_csv_content)), patch(
-        "os.rename"
-    ), patch("os.path.exists", return_value=True), patch("os.remove"), patch(
-        "pandas.read_csv", return_value=pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})
-    ):
+    with patch("builtins.open", mock_open(read_data=mock_csv_content)), patch("os.rename"), patch(
+        "os.path.exists", return_value=True
+    ), patch("os.remove"), patch("pandas.read_csv", return_value=pd.DataFrame({"col1": [1, 2], "col2": [3, 4]})):
         result = keboola_streamlit.read_table("mock_table_id")
 
         assert not result.empty
@@ -58,9 +56,7 @@ def test_read_table(keboola_streamlit):
         assert result.iloc[1].tolist() == [2, 4]
 
         mock_client.tables.detail.assert_called_once_with("mock_table_id")
-        mock_client.tables.export_to_file.assert_called_once_with(
-            table_id="mock_table_id", path_name=""
-        )
+        mock_client.tables.export_to_file.assert_called_once_with(table_id="mock_table_id", path_name="")
         keboola_streamlit.create_event.assert_called_once_with(
             message="Streamlit App Read Table",
             endpoint="https://example.com/v2/storage/tables/mock_table_id/export-async",
