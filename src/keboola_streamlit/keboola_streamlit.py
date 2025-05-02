@@ -6,13 +6,14 @@ import re
 import csv
 import logging
 import uuid
+from cryptography.hazmat.primitives import serialization
 
 from kbcstorage.client import Client
 from typing import Dict, List, Any, Tuple, Optional, Sequence
 from snowflake.snowpark import Session
 
 # Configure logging
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
 class KeboolaStreamlit:
@@ -27,9 +28,9 @@ class KeboolaStreamlit:
         """
         self.__client = Client(root_url, token)
         self.__token = token
-        self.__root_url = root_url.strip('/')
+        self.__root_url = root_url.strip("/")
         self.dev_mockup_headers = None
-        self.aggrid_license_key = os.environ.get('AGGRID_LICENSE_KEY')
+        self.aggrid_license_key = os.environ.get("AGGRID_LICENSE_KEY")
 
     def _get_headers(self) -> dict:
         """
@@ -57,8 +58,8 @@ class KeboolaStreamlit:
         try:
             job_list = self.__client.jobs.list()
             for job in job_list:
-                if job.get('tableId') == table_id and job.get('operationName') == operation_name:
-                    return job.get('id')
+                if job.get("tableId") == table_id and job.get("operationName") == operation_name:
+                    return job.get("id")
             return None
         except Exception as e:
             logging.error(f"Failed to get event job ID for table {table_id} and operation {operation_name}: {e}")
@@ -85,18 +86,18 @@ class KeboolaStreamlit:
         """
         headers = self._get_headers()
 
-        if 'X-Kbc-User-Roles' in headers:
+        if "X-Kbc-User-Roles" in headers:
             if debug:
-                with st.sidebar.expander('Show more'):
+                with st.sidebar.expander("Show more"):
                     st.write(headers)
 
-            user_roles = headers.get('X-Kbc-User-Roles', [])
+            user_roles = headers.get("X-Kbc-User-Roles", [])
             if required_role_id not in user_roles:
                 st.error("You are not authorised to use this app.")
                 st.stop()
         else:
             if debug:
-                st.info('Not using proxy.')
+                st.info("Not using proxy.")
             st.error("Authentication headers are missing. You are not authorized to use this app.")
             st.stop()
 
@@ -111,14 +112,19 @@ class KeboolaStreamlit:
         headers = self._get_headers()
 
         container = st.sidebar if sidebar else st
-        if 'X-Kbc-User-Email' in headers:
-            user_email = headers['X-Kbc-User-Email']
-            container.write(f'Logged in as user: {user_email}')
-            container.link_button('Logout', '/_proxy/sign_out', use_container_width=use_container_width)
+        if "X-Kbc-User-Email" in headers:
+            user_email = headers["X-Kbc-User-Email"]
+            container.write(f"Logged in as user: {user_email}")
+            container.link_button("Logout", "/_proxy/sign_out", use_container_width=use_container_width)
 
-    def create_event(self, message: str = 'Streamlit App Create Event', endpoint: Optional[str] = None,
-                     event_data: Optional[str] = None, job_id: Optional[int] = None,
-                     event_type: str = 'keboola_data_app_create_event') -> Tuple[Optional[int], Optional[str]]:
+    def create_event(
+        self,
+        message: str = "Streamlit App Create Event",
+        endpoint: Optional[str] = None,
+        event_data: Optional[str] = None,
+        job_id: Optional[int] = None,
+        event_type: str = "keboola_data_app_create_event",
+    ) -> Tuple[Optional[int], Optional[str]]:
         """
         Creates an event in Keboola Storage.
 
@@ -133,32 +139,32 @@ class KeboolaStreamlit:
             Tuple[int, str]: The response status code and response text.
         """
         headers = self._get_headers()
-        url = f'{self.__root_url}/v2/storage/events'
+        url = f"{self.__root_url}/v2/storage/events"
         requestHeaders = {
-            'Content-Type': 'application/json',
-            'X-StorageApi-Token': self.__token
+            "Content-Type": "application/json",
+            "X-StorageApi-Token": self.__token,
         }
-        event_application = headers.get('Origin', 'Unknown')
+        event_application = headers.get("Origin", "Unknown")
         requestData = {
-            'message': message,
-            'component': 'keboola.data-apps',
-            'params': {
-                'user': headers.get('X-Kbc-User-Email', 'Unknown'),
-                'endpoint': endpoint or url,
-                'event_type': event_type,
-                'event_application': event_application
-            }
+            "message": message,
+            "component": "keboola.data-apps",
+            "params": {
+                "user": headers.get("X-Kbc-User-Email", "Unknown"),
+                "endpoint": endpoint or url,
+                "event_type": event_type,
+                "event_application": event_application,
+            },
         }
 
-        if event_application != 'Unknown':
-            match = re.search(r'https://.*-(\d+)\.', event_application)
+        if event_application != "Unknown":
+            match = re.search(r"https://.*-(\d+)\.", event_application)
             if match:
-                requestData['params']['application_id'] = match.group(1)
+                requestData["params"]["application_id"] = match.group(1)
 
         if event_data is not None:
-            requestData['params']['event_data'] = f'{event_data}'
+            requestData["params"]["event_data"] = f"{event_data}"
         if job_id is not None:
-            requestData['params']['event_job_id'] = job_id
+            requestData["params"]["event_job_id"] = job_id
 
         try:
             response = requests.post(url, headers=requestHeaders, json=requestData)
@@ -181,28 +187,28 @@ class KeboolaStreamlit:
         client = self.__client
         try:
             table_detail = client.tables.detail(table_id)
-            table_name = table_detail['name']
+            table_name = table_detail["name"]
 
-            client.tables.export_to_file(table_id=table_id, path_name='')
+            client.tables.export_to_file(table_id=table_id, path_name="")
 
-            with open('./' + table_name, mode='rt', encoding='utf-8') as in_file:
-                lazy_lines = (line.replace('\0', '') for line in in_file)
-                reader = csv.reader(lazy_lines, lineterminator='\n')
+            with open("./" + table_name, mode="rt", encoding="utf-8") as in_file:
+                lazy_lines = (line.replace("\0", "") for line in in_file)
+                reader = csv.reader(lazy_lines, lineterminator="\n")
                 data = list(reader)
                 df = pd.DataFrame(data[1:], columns=data[0])
 
-            if os.path.exists(f'{table_name}.csv'):
-                os.remove(f'{table_name}.csv')
+            if os.path.exists(f"{table_name}.csv"):
+                os.remove(f"{table_name}.csv")
 
-            os.rename(table_name, f'{table_name}.csv')
-            df = pd.read_csv(f'{table_name}.csv')
+            os.rename(table_name, f"{table_name}.csv")
+            df = pd.read_csv(f"{table_name}.csv")
 
-            event_job_id = self._get_event_job_id(table_id=table_id, operation_name='tableExport')
+            event_job_id = self._get_event_job_id(table_id=table_id, operation_name="tableExport")
             self.create_event(
-                message='Streamlit App Read Table',
-                endpoint='{}/v2/storage/tables/{}/export-async'.format(self.__root_url, table_id),
+                message="Streamlit App Read Table",
+                endpoint="{}/v2/storage/tables/{}/export-async".format(self.__root_url, table_id),
                 job_id=event_job_id,
-                event_type='keboola_data_app_read_table'
+                event_type="keboola_data_app_read_table",
             )
             return df
         except Exception as e:
@@ -221,26 +227,22 @@ class KeboolaStreamlit:
         """
         client = self.__client
 
-        table_name = table_id.split('.')[-1]
+        table_name = table_id.split(".")[-1]
         unique_id = uuid.uuid4()
-        csv_path = f'{table_name}_{unique_id}.csv.gz'
+        csv_path = f"{table_name}_{unique_id}.csv.gz"
 
         try:
-            df.to_csv(csv_path, index=False, compression='gzip')
+            df.to_csv(csv_path, index=False, compression="gzip")
 
-            client.tables.load(
-                table_id=table_id,
-                file_path=csv_path,
-                is_incremental=is_incremental
-            )
-            event_job_id = self._get_event_job_id(table_id=table_id, operation_name='tableImport')
+            client.tables.load(table_id=table_id, file_path=csv_path, is_incremental=is_incremental)
+            event_job_id = self._get_event_job_id(table_id=table_id, operation_name="tableImport")
 
             self.create_event(
-                message='Streamlit App Write Table',
-                endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
+                message="Streamlit App Write Table",
+                endpoint="{}/v2/storage/tables/{}/import-async".format(self.__root_url, table_id),
                 event_data=df,
                 job_id=event_job_id,
-                event_type='keboola_data_app_write_table'
+                event_type="keboola_data_app_write_table",
             )
         except Exception as e:
             logging.error(f"An error occurred while writing to table {table_id}: {e}")
@@ -261,17 +263,17 @@ class KeboolaStreamlit:
         """
         container = st.sidebar if sidebar else st
         self._add_connection_form(container)
-        if 'kbc_storage_client' in st.session_state:
+        if "kbc_storage_client" in st.session_state:
             self._add_bucket_form(container)
-        if 'selected_bucket' in st.session_state and 'kbc_storage_client' in st.session_state:
+        if "selected_bucket" in st.session_state and "kbc_storage_client" in st.session_state:
             self._add_table_form(container)
-        if 'selected_table_id' in st.session_state and 'kbc_storage_client' in st.session_state:
-            selected_table_id = st.session_state['selected_table_id']
-            if 'tables_data' not in st.session_state:
-                st.session_state['tables_data'] = {}
-            if selected_table_id not in st.session_state['tables_data']:
-                st.session_state['tables_data'][selected_table_id] = self.read_table(table_id=selected_table_id)
-            return st.session_state['tables_data'][selected_table_id]
+        if "selected_table_id" in st.session_state and "kbc_storage_client" in st.session_state:
+            selected_table_id = st.session_state["selected_table_id"]
+            if "tables_data" not in st.session_state:
+                st.session_state["tables_data"] = {}
+            if selected_table_id not in st.session_state["tables_data"]:
+                st.session_state["tables_data"][selected_table_id] = self.read_table(table_id=selected_table_id)
+            return st.session_state["tables_data"][selected_table_id]
         return pd.DataFrame()
 
     def _add_connection_form(self, container: st.delta_generator.DeltaGenerator) -> None:
@@ -281,24 +283,24 @@ class KeboolaStreamlit:
         Args:
             container: Determined by the sidebar argument in the add_table_selection function.
         """
-        if container.button('Connect to Storage', use_container_width=True):
+        if container.button("Connect to Storage", use_container_width=True):
             try:
                 kbc_client = self.__client
 
-                if 'kbc_storage_client' in st.session_state:
-                    st.session_state.pop('kbc_storage_client')
-                if 'selected_table' in st.session_state:
-                    st.session_state.pop('selected_table')
-                if 'selected_table_id' in st.session_state:
-                    st.session_state.pop('selected_table_id')
-                if 'selected_bucket' in st.session_state:
-                    st.session_state.pop('selected_bucket')
-                if 'uploaded_file' in st.session_state:
-                    st.session_state.pop('uploaded_file')
+                if "kbc_storage_client" in st.session_state:
+                    st.session_state.pop("kbc_storage_client")
+                if "selected_table" in st.session_state:
+                    st.session_state.pop("selected_table")
+                if "selected_table_id" in st.session_state:
+                    st.session_state.pop("selected_table_id")
+                if "selected_bucket" in st.session_state:
+                    st.session_state.pop("selected_bucket")
+                if "uploaded_file" in st.session_state:
+                    st.session_state.pop("uploaded_file")
 
                 if self._get_bucket_list(kbc_client):
-                    st.session_state['kbc_storage_client'] = kbc_client
-                    st.session_state['bucket_list'] = self._get_bucket_list(kbc_client)
+                    st.session_state["kbc_storage_client"] = kbc_client
+                    st.session_state["bucket_list"] = self._get_bucket_list(kbc_client)
             except Exception as e:
                 logging.error(f"An error occurred while connecting to storage: {e}")
                 st.error(f"An error occurred while connecting to storage: {e}")
@@ -310,15 +312,15 @@ class KeboolaStreamlit:
         Args:
             container: Determined by the sidebar argument in the add_table_selection function.
         """
-        with container.form('Bucket Details'):
+        with container.form("Bucket Details"):
             buckets = self._get_buckets_from_bucket_list()
             if not buckets:
                 st.warning("No buckets found in the storage.")
-                st.form_submit_button('Select Bucket', disabled=True, use_container_width=True)
+                st.form_submit_button("Select Bucket", disabled=True, use_container_width=True)
             else:
-                bucket = st.selectbox('Bucket', buckets)
-                if st.form_submit_button('Select Bucket', use_container_width=True):
-                    st.session_state['selected_bucket'] = bucket
+                bucket = st.selectbox("Bucket", buckets)
+                if st.form_submit_button("Select Bucket", use_container_width=True):
+                    st.session_state["selected_bucket"] = bucket
 
     def _add_table_form(self, container: st.delta_generator.DeltaGenerator) -> None:
         """
@@ -327,16 +329,16 @@ class KeboolaStreamlit:
         Args:
             container: Determined by the sidebar argument in the add_table_selection function.
         """
-        with container.form('Table Details'):
-            table_names, tables = self._get_tables(st.session_state['selected_bucket'])
+        with container.form("Table Details"):
+            table_names, tables = self._get_tables(st.session_state["selected_bucket"])
             if not table_names:
                 st.warning("No tables found in the selected bucket.")
-                st.form_submit_button('Select table', disabled=True, use_container_width=True)
+                st.form_submit_button("Select table", disabled=True, use_container_width=True)
             else:
-                st.session_state['selected_table'] = st.selectbox('Table', table_names)
-                table_id = tables[st.session_state['selected_table']]['id']
-                if st.form_submit_button('Select table', use_container_width=True):
-                    st.session_state['selected_table_id'] = table_id
+                st.session_state["selected_table"] = st.selectbox("Table", table_names)
+                table_id = tables[st.session_state["selected_table"]]["id"]
+                if st.form_submit_button("Select table", use_container_width=True):
+                    st.session_state["selected_table_id"] = table_id
 
     def _get_bucket_list(self, kbc_storage_client: Client) -> List[dict]:
         """
@@ -362,7 +364,7 @@ class KeboolaStreamlit:
             List[str]: The list of bucket IDs.
         """
         try:
-            return [bucket['id'] for bucket in st.session_state['bucket_list']]
+            return [bucket["id"] for bucket in st.session_state["bucket_list"]]
         except Exception as e:
             logging.error(f"Could not list buckets: {e}")
             st.error(f"Could not list buckets: {e}")
@@ -381,8 +383,7 @@ class KeboolaStreamlit:
         """
         try:
             tables = {
-                table['name']: table
-                for table in st.session_state['kbc_storage_client'].buckets.list_tables(bucket_id)
+                table["name"]: table for table in st.session_state["kbc_storage_client"].buckets.list_tables(bucket_id)
             }
             return list(tables.keys()), tables
         except Exception as e:
@@ -390,25 +391,57 @@ class KeboolaStreamlit:
             st.error(f"An error occurred while retrieving tables from bucket {bucket_id}: {e}")
             return [], {}
 
+    def _get_connection_parameters(self) -> Tuple[dict, str]:
+        """
+        Returns the connection parameters from secrets.
+        """
+        connection_parameters = {
+            "user": st.secrets["SNOWFLAKE_USER"],
+            "account": st.secrets["SNOWFLAKE_ACCOUNT"],
+            "role": st.secrets["SNOWFLAKE_ROLE"],
+            "warehouse": st.secrets["SNOWFLAKE_WAREHOUSE"],
+            "database": st.secrets["SNOWFLAKE_DATABASE"],
+            "schema": st.secrets["SNOWFLAKE_SCHEMA"],
+        }
+
+        if st.secrets["SNOWFLAKE_PRIVATE_KEY"]:
+            connection_parameters["private_key"] = st.secrets["SNOWFLAKE_PRIVATE_KEY"]
+            connection_parameters["private_key_passphrase"] = st.secrets["SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"] or None
+
+        if st.secrets["SNOWFLAKE_PASSWORD"] and not st.secrets["SNOWFLAKE_PRIVATE_KEY"]:
+            connection_parameters["password"] = st.secrets["SNOWFLAKE_PASSWORD"]
+            return connection_parameters, "password"
+
+        if st.secrets["SNOWFLAKE_PRIVATE_KEY"] and st.secrets["SNOWFLAKE_PASSWORD"]:
+            mess = "Both SNOWFLAKE_PRIVATE_KEY and SNOWFLAKE_PASSWORD are set. Using SNOWFLAKE_PRIVATE_KEY."
+            logging.warning(mess)
+            st.warning(mess)
+            connection_parameters["private_key"] = st.secrets["SNOWFLAKE_PRIVATE_KEY"]
+            connection_parameters["private_key_passphrase"] = st.secrets["SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"] or None
+
+        return connection_parameters, "private_key"
+
     def snowflake_create_session_object(self) -> Session:
         """
         Creates a Snowflake session.
         """
-        connection_parameters = {
-            "user": st.secrets['SNOWFLAKE_USER'],
-            "password": st.secrets['SNOWFLAKE_PASSWORD'],
-            "account": st.secrets['SNOWFLAKE_ACCOUNT'],
-            "role": st.secrets['SNOWFLAKE_ROLE'],
-            "warehouse": st.secrets['SNOWFLAKE_WAREHOUSE'],
-            "database": st.secrets['SNOWFLAKE_DATABASE'],
-            "schema": st.secrets['SNOWFLAKE_SCHEMA'],
-        }
-        session = None
         try:
+            connection_parameters, auth_method = self._get_connection_parameters()
+            if auth_method == "private_key":
+                private_key_pem = connection_parameters["private_key"].encode("utf-8")
+                passphrase = connection_parameters["private_key_passphrase"].encode("utf-8") or None
+                unlocked_private_key = serialization.load_pem_private_key(data=private_key_pem, password=passphrase)
+                private_key = unlocked_private_key.private_bytes(
+                    encoding=serialization.Encoding.DER,
+                    format=serialization.PrivateFormat.PKCS8,
+                    encryption_algorithm=serialization.NoEncryption(),
+                )
+                connection_parameters["private_key"] = private_key
+
             session = Session.builder.configs(connection_parameters).create()
             self.create_event(
-                message='Streamlit App Snowflake Create Session Object',
-                event_type='keboola_data_app_snowflake_create_session_object'
+                message="Streamlit App Snowflake Create Session Object",
+                event_type="keboola_data_app_snowflake_create_session_object",
             )
         except Exception as e:
             logging.error(f"An error occurred while creating Snowflake session: {e}")
@@ -429,9 +462,9 @@ class KeboolaStreamlit:
         try:
             df_snowflake = session.table(table_id).to_pandas()
             self.create_event(
-                message='Streamlit App Snowflake Read Table',
-                event_type='keboola_data_app_snowflake_read_table',
-                event_data=f'table_id: {table_id}'
+                message="Streamlit App Snowflake Read Table",
+                event_type="keboola_data_app_snowflake_read_table",
+                event_data=f"table_id: {table_id}",
             )
             return df_snowflake
         except Exception as e:
@@ -444,7 +477,7 @@ class KeboolaStreamlit:
         session: Session,
         query: str,
         params: Optional[Sequence[Any]] = None,
-        return_df: bool = True
+        return_df: bool = True,
     ) -> Optional[pd.DataFrame]:
         """
         Executes a SQL query on Snowflake Workspace.
@@ -462,16 +495,16 @@ class KeboolaStreamlit:
             if return_df:
                 snowflake_df = session.sql(query, params=params).collect()
                 self.create_event(
-                    message='Streamlit App Snowflake Query',
-                    event_type='keboola_data_app_snowflake_query',
-                    event_data=f'Query: {query}'
+                    message="Streamlit App Snowflake Query",
+                    event_type="keboola_data_app_snowflake_query",
+                    event_data=f"Query: {query}",
                 )
                 return snowflake_df
             session.sql(query, params=params).collect()  # Execute the query without returning a DataFrame
             self.create_event(
-                message='Streamlit App Snowflake Query Executed',
-                event_type='keboola_data_app_snowflake_query',
-                event_data=f'Query executed: {query}'
+                message="Streamlit App Snowflake Query Executed",
+                event_type="keboola_data_app_snowflake_query",
+                event_data=f"Query executed: {query}",
             )
         except Exception as e:
             logging.error(f"An error occurred while executing Snowflake query: {e}")
@@ -484,7 +517,7 @@ class KeboolaStreamlit:
         df: pd.DataFrame,
         table_id: str,
         auto_create_table: bool = False,
-        overwrite: bool = False
+        overwrite: bool = False,
     ) -> None:
         """
         Writes a DataFrame to a specified table in the Snowflake Workspace.
@@ -502,9 +535,9 @@ class KeboolaStreamlit:
         try:
             session.write_pandas(df, table_id, auto_create_table=auto_create_table, overwrite=overwrite)
             self.create_event(
-                message='Streamlit App Snowflake Write Table',
-                event_type='keboola_data_app_snowflake_write_table',
-                event_data=f'table_id: {table_id}'
+                message="Streamlit App Snowflake Write Table",
+                event_type="keboola_data_app_snowflake_write_table",
+                event_data=f"table_id: {table_id}",
             )
         except Exception as e:
             logging.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
