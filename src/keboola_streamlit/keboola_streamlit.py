@@ -255,7 +255,6 @@ class KeboolaStreamlit:
                 message='Streamlit App Write Table Error',
                 endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
                 event_data=f'Error: {str(e)}',
-                job_id=event_job_id,
                 event_type='keboola_data_app_write_table_error'
             )
             if return_status:
