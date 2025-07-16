@@ -251,14 +251,14 @@ class KeboolaStreamlit:
                 return True, f"Successfully wrote data to table {table_id}"
         except Exception as e:
             logging.error(f"An error occurred while writing to table {table_id}: {e}")
+            self.create_event(
+                message='Streamlit App Write Table Error',
+                endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
+                event_data=f'Error: {str(e)}',
+                job_id=event_job_id,
+                event_type='keboola_data_app_write_table_error'
+            )
             if return_status:
-                self.create_event(
-                    message='Streamlit App Write Table Error',
-                    endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
-                    event_data=f'Error: {str(e)}',
-                    job_id=event_job_id,
-                    event_type='keboola_data_app_write_table_error'
-                )
                 return False, f"Failed to write data to table {table_id}: {str(e)}"
         finally:
             if os.path.exists(csv_path):
