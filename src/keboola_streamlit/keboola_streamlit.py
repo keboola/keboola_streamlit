@@ -211,7 +211,7 @@ class KeboolaStreamlit:
             st.error(f"An error occurred while reading table {table_id}: {e}")
         return pd.DataFrame()
 
-    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False, return_status: bool = False) -> Optional[Tuple[bool, str]]:
+    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False, raise_on_error: bool = False) -> Optional[str]:
         """
         Load data into an existing table.
 
@@ -219,10 +219,10 @@ class KeboolaStreamlit:
             table_id (str): The ID of the table to load data into.
             df (pd.DataFrame): The DataFrame containing the data to be loaded.
             is_incremental (bool): Whether to load incrementally (do not truncate the table). Defaults to False.
-            return_status (bool): Whether to return status information. Defaults to False.
+            raise_on_error (bool): If True, raises the exception instead of returning it. Defaults to False.
         
         Returns:
-            Optional[Tuple[bool, str]]: If return_status is True, returns a tuple containing success status and a message describing the result. Otherwise returns None.
+            Optional[str]: None if successful, error message string if failed (when raise_on_error=False).
         """
         client = self.__client
 
@@ -247,18 +247,12 @@ class KeboolaStreamlit:
                 job_id=event_job_id,
                 event_type='keboola_data_app_write_table'
             )
-            if return_status:
-                return True, f"Successfully wrote data to table {table_id}"
+            return None
         except Exception as e:
             logging.error(f"An error occurred while writing to table {table_id}: {e}")
-            self.create_event(
-                message='Streamlit App Write Table Error',
-                endpoint='{}/v2/storage/tables/{}/import-async'.format(self.__root_url, table_id),
-                event_data=f'Error: {str(e)}',
-                event_type='keboola_data_app_write_table_error'
-            )
-            if return_status:
-                return False, f"Failed to write data to table {table_id}: {str(e)}"
+            if raise_on_error:
+                raise
+            return repr(e)
         finally:
             if os.path.exists(csv_path):
                 os.remove(csv_path)
