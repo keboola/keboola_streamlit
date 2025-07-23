@@ -1,15 +1,16 @@
-import streamlit as st
-import pandas as pd
-import requests
-import os
-import re
 import csv
 import logging
+import os
+import re
 import uuid
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import pandas as pd
+import requests
+import streamlit as st
 from kbcstorage.client import Client
-from typing import Dict, List, Any, Tuple, Optional, Sequence
 from snowflake.snowpark import Session
+
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -175,7 +176,7 @@ class KeboolaStreamlit:
 
         Args:
             table_id (str): The ID of the table to retrieve data from.
-        
+
         Returns:
             pd.DataFrame: The table data as a Pandas DataFrame.
         """
