@@ -1,15 +1,16 @@
-import streamlit as st
-import pandas as pd
-import requests
-import os
-import re
 import csv
 import logging
+import os
+import re
 import uuid
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import pandas as pd
+import requests
+import streamlit as st
 from kbcstorage.client import Client
-from typing import Dict, List, Any, Tuple, Optional, Sequence
 from snowflake.snowpark import Session
+
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -175,6 +176,7 @@ class KeboolaStreamlit:
 
         Args:
             table_id (str): The ID of the table to retrieve data from.
+
         Returns:
             pd.DataFrame: The table data as a Pandas DataFrame.
         """
@@ -210,7 +212,13 @@ class KeboolaStreamlit:
             st.error(f"An error occurred while reading table {table_id}: {e}")
         return pd.DataFrame()
 
-    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False) -> None:
+    def write_table(
+        self,
+        table_id: str,
+        df: pd.DataFrame,
+        is_incremental: bool = False,
+        raise_on_error: bool = False,
+    ) -> Optional[str]:
         """
         Load data into an existing table.
 
@@ -218,6 +226,10 @@ class KeboolaStreamlit:
             table_id (str): The ID of the table to load data into.
             df (pd.DataFrame): The DataFrame containing the data to be loaded.
             is_incremental (bool): Whether to load incrementally (do not truncate the table). Defaults to False.
+            raise_on_error (bool): If True, raises the exception instead of returning it. Defaults to False.
+
+        Returns:
+            Optional[str]: None if successful, error message string if failed (when raise_on_error=False).
         """
         client = self.__client
 
@@ -242,9 +254,12 @@ class KeboolaStreamlit:
                 job_id=event_job_id,
                 event_type='keboola_data_app_write_table'
             )
+            return None
         except Exception as e:
             logging.error(f"An error occurred while writing to table {table_id}: {e}")
-            st.error(f"An error occurred while writing to table {table_id}: {e}")
+            if raise_on_error:
+                raise
+            return repr(e)
         finally:
             if os.path.exists(csv_path):
                 os.remove(csv_path)
