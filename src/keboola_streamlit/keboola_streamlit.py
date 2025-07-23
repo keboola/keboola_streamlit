@@ -211,7 +211,13 @@ class KeboolaStreamlit:
             st.error(f"An error occurred while reading table {table_id}: {e}")
         return pd.DataFrame()
 
-    def write_table(self, table_id: str, df: pd.DataFrame, is_incremental: bool = False, raise_on_error: bool = False) -> Optional[str]:
+    def write_table(
+        self,
+        table_id: str,
+        df: pd.DataFrame,
+        is_incremental: bool = False,
+        raise_on_error: bool = False,
+    ) -> Optional[str]:
         """
         Load data into an existing table.
 
@@ -220,7 +226,7 @@ class KeboolaStreamlit:
             df (pd.DataFrame): The DataFrame containing the data to be loaded.
             is_incremental (bool): Whether to load incrementally (do not truncate the table). Defaults to False.
             raise_on_error (bool): If True, raises the exception instead of returning it. Defaults to False.
-        
+
         Returns:
             Optional[str]: None if successful, error message string if failed (when raise_on_error=False).
         """
