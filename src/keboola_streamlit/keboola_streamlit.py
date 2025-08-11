@@ -408,38 +408,33 @@ class KeboolaStreamlit:
         Returns the connection parameters from secrets.
         """
         connection_parameters = {
-            "user": st.secrets["SNOWFLAKE_USER"],
-            "account": st.secrets["SNOWFLAKE_ACCOUNT"],
-            "role": st.secrets["SNOWFLAKE_ROLE"],
-            "warehouse": st.secrets["SNOWFLAKE_WAREHOUSE"],
-            "database": st.secrets["SNOWFLAKE_DATABASE"],
-            "schema": st.secrets["SNOWFLAKE_SCHEMA"],
+            "user": st.secrets.get("SNOWFLAKE_USER", ""),
+            "account": st.secrets.get("SNOWFLAKE_ACCOUNT", ""),
+            "role": st.secrets.get("SNOWFLAKE_ROLE", ""),
+            "warehouse": st.secrets("SNOWFLAKE_WAREHOUSE", ""),
+            "database": st.secrets.get("SNOWFLAKE_DATABASE", ""),
+            "schema": st.secrets.get("SNOWFLAKE_SCHEMA", ""),
         }
 
-        if st.secrets["SNOWFLAKE_PRIVATE_KEY"]:
-            connection_parameters["private_key"] = st.secrets["SNOWFLAKE_PRIVATE_KEY"]
-            connection_parameters["private_key_passphrase"] = (
-                st.secrets["SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"]
-                if st.secrets["SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"]
-                else None
-            )
+        private_key = st.secrets.get("SNOWFLAKE_PRIVATE_KEY")
+        password = st.secrets.get("SNOWFLAKE_PASSWORD")
 
-        if st.secrets["SNOWFLAKE_PASSWORD"] and not st.secrets["SNOWFLAKE_PRIVATE_KEY"]:
-            connection_parameters["password"] = st.secrets["SNOWFLAKE_PASSWORD"]
+        if private_key:
+            connection_parameters["private_key"] = private_key
+            connection_parameters["private_key_passphrase"] = st.secrets.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE") or None
+
+            if password:
+                mess = "Both SNOWFLAKE_PRIVATE_KEY and SNOWFLAKE_PASSWORD are set. Using SNOWFLAKE_PRIVATE_KEY."
+                logging.warning(mess)
+                st.warning(mess)
+
+            return connection_parameters, "private_key"
+
+        if password:
+            connection_parameters["password"] = password
             return connection_parameters, "password"
 
-        if st.secrets["SNOWFLAKE_PRIVATE_KEY"] and st.secrets["SNOWFLAKE_PASSWORD"]:
-            mess = "Both SNOWFLAKE_PRIVATE_KEY and SNOWFLAKE_PASSWORD are set. Using SNOWFLAKE_PRIVATE_KEY."
-            logging.warning(mess)
-            st.warning(mess)
-            connection_parameters["private_key"] = st.secrets["SNOWFLAKE_PRIVATE_KEY"]
-            connection_parameters["private_key_passphrase"] = (
-                st.secrets["SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"]
-                if st.secrets["SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"]
-                else None
-            )
-
-        return connection_parameters, "private_key"
+        raise KeyError("Neither SNOWFLAKE_PRIVATE_KEY nor SNOWFLAKE_PASSWORD is set in secrets")
 
     def snowflake_create_session_object(self) -> Session:
         """
@@ -449,7 +444,8 @@ class KeboolaStreamlit:
             connection_parameters, auth_method = self._get_connection_parameters()
             if auth_method == "private_key":
                 private_key_pem = connection_parameters["private_key"].encode("utf-8")
-                passphrase = connection_parameters["private_key_passphrase"].encode("utf-8") or None
+                pkp = connection_parameters.get("private_key_passphrase")
+                passphrase = pkp.encode("utf-8") if pkp else None
                 unlocked_private_key = serialization.load_pem_private_key(data=private_key_pem, password=passphrase)
                 private_key = unlocked_private_key.private_bytes(
                     encoding=serialization.Encoding.DER,
