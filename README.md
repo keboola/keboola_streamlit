@@ -89,12 +89,24 @@ df = keboola.add_table_selection(sidebar=True)
 To interact with Snowflake, first create a session using your Streamlit secrets. Ensure that the following secrets are set in your Streamlit configuration:
 
 - `SNOWFLAKE_USER`
-- `SNOWFLAKE_PASSWORD`
 - `SNOWFLAKE_ACCOUNT`
 - `SNOWFLAKE_ROLE`
 - `SNOWFLAKE_WAREHOUSE`
 - `SNOWFLAKE_DATABASE`
 - `SNOWFLAKE_SCHEMA`
+
+For authorization you can use password:
+
+- `SNOWFLAKE_PASSWORD`
+
+Or key-pair:
+
+- `SNOWFLAKE_PRIVATE_KEY`
+- `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` (Optional)
+
+Streamlit will automatically use type of authorization based on what you fill in secrets.
+
+>NOTE: If both password and key-pair are filled in secrets, Streamlit by default will use the key-pair authorization.
 
 Then, create the session as follows:
 
