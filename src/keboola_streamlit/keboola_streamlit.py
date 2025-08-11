@@ -407,21 +407,22 @@ class KeboolaStreamlit:
         """
         Returns the connection parameters from secrets.
         """
+        scrts = st.secrets.to_dict()
         connection_parameters = {
-            "user": st.secrets.get("SNOWFLAKE_USER", ""),
-            "account": st.secrets.get("SNOWFLAKE_ACCOUNT", ""),
-            "role": st.secrets.get("SNOWFLAKE_ROLE", ""),
-            "warehouse": st.secrets("SNOWFLAKE_WAREHOUSE", ""),
-            "database": st.secrets.get("SNOWFLAKE_DATABASE", ""),
-            "schema": st.secrets.get("SNOWFLAKE_SCHEMA", ""),
+            "user": scrts.get("SNOWFLAKE_USER", ""),
+            "account": scrts.get("SNOWFLAKE_ACCOUNT", ""),
+            "role": scrts.get("SNOWFLAKE_ROLE", ""),
+            "warehouse": scrts.get("SNOWFLAKE_WAREHOUSE", ""),
+            "database": scrts.get("SNOWFLAKE_DATABASE", ""),
+            "schema": scrts.get("SNOWFLAKE_SCHEMA", ""),
         }
 
-        private_key = st.secrets.get("SNOWFLAKE_PRIVATE_KEY")
-        password = st.secrets.get("SNOWFLAKE_PASSWORD")
+        private_key = scrts.get("SNOWFLAKE_PRIVATE_KEY")
+        password = scrts.get("SNOWFLAKE_PASSWORD")
 
         if private_key:
             connection_parameters["private_key"] = private_key
-            connection_parameters["private_key_passphrase"] = st.secrets.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE") or None
+            connection_parameters["private_key_passphrase"] = scrts.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE") or None
 
             if password:
                 mess = "Both SNOWFLAKE_PRIVATE_KEY and SNOWFLAKE_PASSWORD are set. Using SNOWFLAKE_PRIVATE_KEY."
