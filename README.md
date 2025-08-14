@@ -95,7 +95,7 @@ To interact with Snowflake, first create a session using your Streamlit secrets.
 - `SNOWFLAKE_DATABASE`
 - `SNOWFLAKE_SCHEMA`
 
-For authorization you can use password:
+For authentication you can use password:
 
 - `SNOWFLAKE_PASSWORD`
 
@@ -106,7 +106,7 @@ Or key-pair:
 
 Streamlit will automatically use type of authorization based on what you fill in secrets.
 
->NOTE: If both password and key-pair are filled in secrets, Streamlit by default will use the key-pair authorization.
+> NOTE: If both password and key-pair are filled in secrets, Streamlit by default will use the key-pair authorization.
 
 Then, create the session as follows:
 

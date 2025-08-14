@@ -429,11 +429,11 @@ class KeboolaStreamlit:
                 logging.warning(mess)
                 st.warning(mess)
 
-            return connection_parameters, "private_key"
+            return connection_parameters
 
         if password:
             connection_parameters["password"] = password
-            return connection_parameters, "password"
+            return connection_parameters
 
         raise KeyError("Neither SNOWFLAKE_PRIVATE_KEY nor SNOWFLAKE_PASSWORD is set in secrets")
 
@@ -442,8 +442,8 @@ class KeboolaStreamlit:
         Creates a Snowflake session.
         """
         try:
-            connection_parameters, auth_method = self._get_connection_parameters()
-            if auth_method == "private_key":
+            connection_parameters = self._get_connection_parameters()
+            if "private_key" in connection_parameters:
                 private_key_pem = connection_parameters["private_key"].encode("utf-8")
                 pkp = connection_parameters.get("private_key_passphrase")
                 passphrase = pkp.encode("utf-8") if pkp else None
