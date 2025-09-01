@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "keboola_streamlit"
-version = "v0.1.2"
+version = "v0.1.3"
 dependencies = [
     "streamlit>=1.37.0",
     "pandas",
@@ -37,3 +37,6 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 120
