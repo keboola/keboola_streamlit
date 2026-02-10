@@ -32,12 +32,13 @@ jobs:
         run: |
           pytest
 
-      - name: Smoke test - build wheel and import from clean install
+      - name: Smoke test - build wheel and import from isolated venv
         run: |
           python -m pip install build
           python -m build --wheel
-          pip install dist/*.whl --force-reinstall
-          python -c "from keboola_streamlit import KeboolaStreamlit; print('Smoke test passed')"
+          python -m venv venv
+          ./venv/bin/pip install dist/*.whl
+          ./venv/bin/python -c "from keboola_streamlit import KeboolaStreamlit; print('Smoke test passed')"
 
   publish-event-info:
     runs-on: ubuntu-latest
