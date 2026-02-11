@@ -12,7 +12,7 @@ dependencies = [
     "deprecated",
     "snowflake-snowpark-python>=1.35.0",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "pandyandy", email = "andrea.novakova@keboola.com"},
     {name = "yustme", email = "vojta.tuma@keboola.com"},
@@ -22,7 +22,6 @@ readme = "README.md"
 license = {text = "MIT License"}
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
