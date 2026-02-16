@@ -12,10 +12,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
         with:
-          python-version: ${{ matrix.python-version }}
           enable-cache: true
 
       - name: Install dependencies
@@ -93,10 +97,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
 
       - name: Build the package
         run: uv build
