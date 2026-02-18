@@ -23,25 +23,20 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system -r requirements.txt
-          uv pip install --system pytest pre-commit
+        run: uv sync
 
       - name: Run pre-commit checks
         run: |
-          pre-commit install
-          pre-commit run --all-files
+          uv run pre-commit install
+          uv run pre-commit run --all-files
 
       - name: Run tests
-        run: |
-          pytest
+        run: uv run pytest
 
       - name: Smoke test - build wheel and import from isolated venv
         run: |
           uv build --wheel
-          uv venv venv
-          uv pip install --python venv/bin/python dist/*.whl
-          venv/bin/python -c "from keboola_streamlit import KeboolaStreamlit; print('Smoke test passed')"
+          uv run --isolated --with dist/*.whl python -c "from keboola_streamlit import KeboolaStreamlit; print('Smoke test passed')"
 
   publish-event-info:
     runs-on: ubuntu-latest

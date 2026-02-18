@@ -35,5 +35,11 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/keboola/keboola_streamlit/"
 
+[dependency-groups]
+dev = [
+    "pytest",
+    "pre-commit",
+]
+
 [tool.ruff]
 line-length = 120
