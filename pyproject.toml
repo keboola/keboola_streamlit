@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "keboola_streamlit"
-version = "v0.1.3"
+version = "v0.1.5"
 dependencies = [
     "streamlit>=1.37.0",
     "pandas",
