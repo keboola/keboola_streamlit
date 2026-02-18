@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
 
 [project]
 name = "keboola_streamlit"
@@ -10,9 +10,9 @@ dependencies = [
     "pandas",
     "kbcstorage",
     "deprecated",
-    "snowflake-snowpark-python",
+    "snowflake-snowpark-python>=1.35.0",
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.10"
 authors = [
     {name = "pandyandy", email = "andrea.novakova@keboola.com"},
     {name = "yustme", email = "vojta.tuma@keboola.com"},
@@ -22,6 +22,10 @@ readme = "README.md"
 license = {text = "MIT License"}
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Intended Audience :: Developers",
@@ -31,12 +35,11 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/keboola/keboola_streamlit/"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[dependency-groups]
+dev = [
+    "pytest",
+    "pre-commit",
+]
 
 [tool.ruff]
 line-length = 120
