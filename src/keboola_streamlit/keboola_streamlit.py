@@ -440,7 +440,7 @@ class KeboolaStreamlit:
 
         raise KeyError("Neither SNOWFLAKE_PRIVATE_KEY nor SNOWFLAKE_PASSWORD is set in secrets")
 
-    def snowflake_create_session_object(self) -> Session:
+    def snowflake_create_session_object(self) -> Optional[Session]:
         """
         Creates a Snowflake session.
         """
