@@ -1,16 +1,19 @@
+from __future__ import annotations
+
 import csv
 import logging
 import os
 import re
 import uuid
-from cryptography.hazmat.primitives import serialization
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import requests
 import streamlit as st
 from kbcstorage.client import Client
-from snowflake.snowpark import Session
+
+if TYPE_CHECKING:
+    from snowflake.snowpark import Session
 
 
 # Configure logging
@@ -441,6 +444,16 @@ class KeboolaStreamlit:
         """
         Creates a Snowflake session.
         """
+        try:
+            from snowflake.snowpark import Session
+            from cryptography.hazmat.primitives import serialization
+        except ImportError as e:
+            raise ImportError(
+                "Snowflake support requires an optional dependency. "
+                "Install it with: pip install keboola-streamlit[snowflake]"
+            ) from e
+
+        session = None
         try:
             connection_parameters = self._get_connection_parameters()
             if "private_key" in connection_parameters:

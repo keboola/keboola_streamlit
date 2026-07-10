@@ -10,7 +10,6 @@ dependencies = [
     "pandas",
     "kbcstorage",
     "deprecated",
-    "snowflake-snowpark-python>=1.35.0",
 ]
 requires-python = ">=3.10"
 authors = [
@@ -31,6 +30,9 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
+
+[project.optional-dependencies]
+snowflake = ["snowflake-snowpark-python>=1.35.0"]
 
 [project.urls]
 Repository = "https://github.com/keboola/keboola_streamlit/"

@@ -12,6 +12,13 @@ To install:
 pip install keboola-streamlit
 ```
 
+If you also need the [Snowflake Integration](#snowflake-integration) functions, install the
+`snowflake` extra:
+
+```bash
+pip install keboola-streamlit[snowflake]
+```
+
 _If you are using `streamlit<=1.36.0`, please use version `0.0.5` of the keboola-streamlit package._
 
 ## Usage
@@ -83,6 +90,8 @@ df = keboola.add_table_selection(sidebar=True)
 ```
 
 ### Snowflake Integration
+
+> Requires the `snowflake` extra: `pip install keboola-streamlit[snowflake]`
 
 #### Creating a Snowflake Session
 

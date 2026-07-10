@@ -78,6 +78,12 @@ def test_write_table(keboola_streamlit):
             keboola_streamlit._KeboolaStreamlit__client.tables.load.assert_called_once()
 
 
+def test_snowflake_create_session_object_without_extra(keboola_streamlit):
+    with patch.dict(sys.modules, {"snowflake": None, "snowflake.snowpark": None}):
+        with pytest.raises(ImportError, match=r"keboola-streamlit\[snowflake\]"):
+            keboola_streamlit.snowflake_create_session_object()
+
+
 def test_add_table_selection(keboola_streamlit):
     with patch("streamlit.sidebar") as mock_sidebar:
         mock_sidebar.button = MagicMock(return_value=True)
