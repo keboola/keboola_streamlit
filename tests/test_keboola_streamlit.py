@@ -1,3 +1,4 @@
+import builtins
 import sys
 import os
 import pytest
@@ -82,6 +83,85 @@ def test_snowflake_create_session_object_without_extra(keboola_streamlit):
     with patch.dict(sys.modules, {"snowflake": None, "snowflake.snowpark": None}):
         with pytest.raises(ImportError, match=r"keboola-streamlit\[snowflake\]"):
             keboola_streamlit.snowflake_create_session_object()
+
+
+def test_snowflake_create_session_object_missing_unrelated_dependency_is_not_masked(keboola_streamlit):
+    # If snowflake IS installed but one of its own transitive dependencies is broken/missing
+    # (e.g. a pyarrow ABI mismatch), the error shouldn't be rewritten into a misleading
+    # "install the extra" message.
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "snowflake.snowpark":
+            raise ModuleNotFoundError("No module named 'pyarrow'", name="pyarrow")
+        return real_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        with pytest.raises(ModuleNotFoundError, match="pyarrow"):
+            keboola_streamlit.snowflake_create_session_object()
+
+
+def _mock_snowpark_module():
+    fake_session_instance = MagicMock(name="snowflake_session")
+    fake_session_cls = MagicMock(name="Session")
+    fake_session_cls.builder.configs.return_value.create.return_value = fake_session_instance
+    fake_module = MagicMock(Session=fake_session_cls)
+    return fake_module, fake_session_cls, fake_session_instance
+
+
+def test_snowflake_create_session_object_with_password(keboola_streamlit):
+    fake_module, fake_session_cls, fake_session_instance = _mock_snowpark_module()
+    keboola_streamlit.create_event = MagicMock()
+
+    with patch.dict(sys.modules, {"snowflake": MagicMock(), "snowflake.snowpark": fake_module}):
+        with patch("streamlit.secrets") as mock_secrets:
+            mock_secrets.to_dict.return_value = {
+                "SNOWFLAKE_USER": "user",
+                "SNOWFLAKE_ACCOUNT": "account",
+                "SNOWFLAKE_ROLE": "role",
+                "SNOWFLAKE_WAREHOUSE": "wh",
+                "SNOWFLAKE_DATABASE": "db",
+                "SNOWFLAKE_SCHEMA": "schema",
+                "SNOWFLAKE_PASSWORD": "secret",
+            }
+            session = keboola_streamlit.snowflake_create_session_object()
+
+    assert session is fake_session_instance
+    connection_parameters = fake_session_cls.builder.configs.call_args[0][0]
+    assert connection_parameters["password"] == "secret"
+    assert "private_key" not in connection_parameters
+
+
+def test_snowflake_create_session_object_with_private_key(keboola_streamlit):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+
+    fake_module, fake_session_cls, fake_session_instance = _mock_snowpark_module()
+    keboola_streamlit.create_event = MagicMock()
+
+    with patch.dict(sys.modules, {"snowflake": MagicMock(), "snowflake.snowpark": fake_module}):
+        with patch("streamlit.secrets") as mock_secrets:
+            mock_secrets.to_dict.return_value = {
+                "SNOWFLAKE_USER": "user",
+                "SNOWFLAKE_ACCOUNT": "account",
+                "SNOWFLAKE_ROLE": "role",
+                "SNOWFLAKE_WAREHOUSE": "wh",
+                "SNOWFLAKE_DATABASE": "db",
+                "SNOWFLAKE_SCHEMA": "schema",
+                "SNOWFLAKE_PRIVATE_KEY": private_key_pem,
+            }
+            session = keboola_streamlit.snowflake_create_session_object()
+
+    assert session is fake_session_instance
+    connection_parameters = fake_session_cls.builder.configs.call_args[0][0]
+    assert isinstance(connection_parameters["private_key"], bytes)
 
 
 def test_add_table_selection(keboola_streamlit):

@@ -443,15 +443,23 @@ class KeboolaStreamlit:
     def snowflake_create_session_object(self) -> Optional[Session]:
         """
         Creates a Snowflake session.
+
+        Returns:
+            Optional[Session]: The Snowflake session, or None if session creation failed
+            (the error is logged and shown via st.error).
         """
         try:
             from snowflake.snowpark import Session
             from cryptography.hazmat.primitives import serialization
-        except ImportError as e:
-            raise ImportError(
-                "Snowflake support requires an optional dependency. "
-                "Install it with: pip install keboola-streamlit[snowflake]"
-            ) from e
+        except ModuleNotFoundError as e:
+            missing = e.name or ""
+            missing_root = missing.split(".", 1)[0]
+            if missing_root in ("snowflake", "cryptography"):
+                raise ImportError(
+                    "Snowflake support requires an optional dependency. "
+                    "Install it with: pip install keboola-streamlit[snowflake]"
+                ) from e
+            raise
 
         session = None
         try:
