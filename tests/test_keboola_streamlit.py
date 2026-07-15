@@ -164,6 +164,35 @@ def test_snowflake_create_session_object_with_private_key(keboola_streamlit):
     assert isinstance(connection_parameters["private_key"], bytes)
 
 
+def test_snowflake_read_table_without_session(keboola_streamlit):
+    with patch("streamlit.error") as mock_error:
+        result = keboola_streamlit.snowflake_read_table(None, "table_id")
+
+    assert isinstance(result, pd.DataFrame)
+    assert result.empty
+    mock_error.assert_called_once()
+    assert "No Snowflake session" in mock_error.call_args[0][0]
+
+
+def test_snowflake_execute_query_without_session(keboola_streamlit):
+    with patch("streamlit.error") as mock_error:
+        result = keboola_streamlit.snowflake_execute_query(None, "SELECT 1")
+
+    assert result is None
+    mock_error.assert_called_once()
+    assert "No Snowflake session" in mock_error.call_args[0][0]
+
+
+def test_snowflake_write_table_without_session(keboola_streamlit):
+    df = pd.DataFrame({"col1": [1]})
+    with patch("streamlit.error") as mock_error:
+        result = keboola_streamlit.snowflake_write_table(None, df, "table_id")
+
+    assert result is None
+    mock_error.assert_called_once()
+    assert "No Snowflake session" in mock_error.call_args[0][0]
+
+
 def test_add_table_selection(keboola_streamlit):
     with patch("streamlit.sidebar") as mock_sidebar:
         mock_sidebar.button = MagicMock(return_value=True)
