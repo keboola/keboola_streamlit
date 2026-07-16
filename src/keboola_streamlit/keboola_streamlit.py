@@ -1,16 +1,19 @@
+from __future__ import annotations
+
 import csv
 import logging
 import os
 import re
 import uuid
-from cryptography.hazmat.primitives import serialization
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import requests
 import streamlit as st
 from kbcstorage.client import Client
-from snowflake.snowpark import Session
+
+if TYPE_CHECKING:
+    from snowflake.snowpark import Session
 
 
 # Configure logging
@@ -437,10 +440,28 @@ class KeboolaStreamlit:
 
         raise KeyError("Neither SNOWFLAKE_PRIVATE_KEY nor SNOWFLAKE_PASSWORD is set in secrets")
 
-    def snowflake_create_session_object(self) -> Session:
+    def snowflake_create_session_object(self) -> Optional[Session]:
         """
         Creates a Snowflake session.
+
+        Returns:
+            Optional[Session]: The Snowflake session, or None if session creation failed
+            (the error is logged and shown via st.error).
         """
+        try:
+            from snowflake.snowpark import Session
+            from cryptography.hazmat.primitives import serialization
+        except ModuleNotFoundError as e:
+            missing = e.name or ""
+            missing_root = missing.split(".", 1)[0]
+            if missing_root in ("snowflake", "cryptography"):
+                raise ImportError(
+                    "Snowflake support requires an optional dependency. "
+                    "Install it with: pip install keboola-streamlit[snowflake]"
+                ) from e
+            raise
+
+        session = None
         try:
             connection_parameters = self._get_connection_parameters()
             if "private_key" in connection_parameters:
@@ -465,7 +486,15 @@ class KeboolaStreamlit:
             st.error(f"An error occurred while creating Snowflake session: {e}")
         return session
 
-    def snowflake_read_table(self, session: Session, table_id: str) -> pd.DataFrame:
+    def _log_missing_snowflake_session(self) -> None:
+        message = (
+            "No Snowflake session provided. snowflake_create_session_object() likely failed "
+            "and returned None - check the error logged from that call."
+        )
+        logging.error(message)
+        st.error(message)
+
+    def snowflake_read_table(self, session: Optional[Session], table_id: str) -> pd.DataFrame:
         """
         Loads a table from Snowflake Workspace.
 
@@ -476,6 +505,9 @@ class KeboolaStreamlit:
         Returns:
             pd.DataFrame: The table data as a Pandas DataFrame.
         """
+        if session is None:
+            self._log_missing_snowflake_session()
+            return pd.DataFrame()
         try:
             df_snowflake = session.table(table_id).to_pandas()
             self.create_event(
@@ -491,7 +523,7 @@ class KeboolaStreamlit:
 
     def snowflake_execute_query(
         self,
-        session: Session,
+        session: Optional[Session],
         query: str,
         params: Optional[Sequence[Any]] = None,
         return_df: bool = True,
@@ -508,9 +540,12 @@ class KeboolaStreamlit:
         Returns:
             Optional[pd.DataFrame]: The query results as a Pandas DataFrame if return_df is True, otherwise None.
         """
+        if session is None:
+            self._log_missing_snowflake_session()
+            return None
         try:
             if return_df:
-                snowflake_df = session.sql(query, params=params).collect()
+                snowflake_df = session.sql(query, params=params).to_pandas()
                 self.create_event(
                     message="Streamlit App Snowflake Query",
                     event_type="keboola_data_app_snowflake_query",
@@ -530,7 +565,7 @@ class KeboolaStreamlit:
 
     def snowflake_write_table(
         self,
-        session: Session,
+        session: Optional[Session],
         df: pd.DataFrame,
         table_id: str,
         auto_create_table: bool = False,
@@ -549,6 +584,9 @@ class KeboolaStreamlit:
         Returns:
             None
         """
+        if session is None:
+            self._log_missing_snowflake_session()
+            return None
         try:
             session.write_pandas(df, table_id, auto_create_table=auto_create_table, overwrite=overwrite)
             self.create_event(
