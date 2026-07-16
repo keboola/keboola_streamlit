@@ -545,7 +545,7 @@ class KeboolaStreamlit:
             return None
         try:
             if return_df:
-                snowflake_df = session.sql(query, params=params).collect()
+                snowflake_df = session.sql(query, params=params).to_pandas()
                 self.create_event(
                     message="Streamlit App Snowflake Query",
                     event_type="keboola_data_app_snowflake_query",

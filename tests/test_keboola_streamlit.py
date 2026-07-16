@@ -193,6 +193,30 @@ def test_snowflake_write_table_without_session(keboola_streamlit):
     assert "No Snowflake session" in mock_error.call_args[0][0]
 
 
+def test_snowflake_execute_query_returns_dataframe(keboola_streamlit):
+    mock_session = MagicMock()
+    expected_df = pd.DataFrame({"col1": [1, 2]})
+    mock_session.sql.return_value.to_pandas.return_value = expected_df
+    keboola_streamlit.create_event = MagicMock()
+
+    result = keboola_streamlit.snowflake_execute_query(mock_session, "SELECT 1")
+
+    assert result is expected_df
+    mock_session.sql.return_value.to_pandas.assert_called_once()
+    mock_session.sql.return_value.collect.assert_not_called()
+
+
+def test_snowflake_execute_query_without_return_df(keboola_streamlit):
+    mock_session = MagicMock()
+    keboola_streamlit.create_event = MagicMock()
+
+    result = keboola_streamlit.snowflake_execute_query(mock_session, "UPDATE t SET x = 1", return_df=False)
+
+    assert result is None
+    mock_session.sql.return_value.collect.assert_called_once()
+    mock_session.sql.return_value.to_pandas.assert_not_called()
+
+
 def test_add_table_selection(keboola_streamlit):
     with patch("streamlit.sidebar") as mock_sidebar:
         mock_sidebar.button = MagicMock(return_value=True)
