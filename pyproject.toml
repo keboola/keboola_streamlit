@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "keboola_streamlit"
-version = "v0.2.0"
+version = "v0.3.0"
 dependencies = [
     "streamlit>=1.37.0",
     "pandas",
@@ -33,6 +33,7 @@ classifiers = [
 
 [project.optional-dependencies]
 snowflake = ["snowflake-snowpark-python>=1.35.0"]
+query-service = ["keboola-query-service>=0.3.0"]
 
 [project.urls]
 Repository = "https://github.com/keboola/keboola_streamlit/"

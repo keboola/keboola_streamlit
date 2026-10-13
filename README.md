@@ -19,6 +19,13 @@ If you also need the [Snowflake Integration](#snowflake-integration) functions, 
 pip install keboola-streamlit[snowflake]
 ```
 
+If you need the [Query Service Integration](#query-service-integration) functions, install the
+`query-service` extra:
+
+```bash
+pip install keboola-streamlit[query-service]
+```
+
 _If you are using `streamlit<=1.36.0`, please use version `0.0.5` of the keboola-streamlit package._
 
 ## Usage
@@ -147,6 +154,63 @@ Write a Pandas DataFrame to a Snowflake table:
 ```python
 keboola.snowflake_write_table(session=st.session_state['snowflake_session'], df=your_dataframe, table_id='YOUR_SNOWFLAKE_TABLE_ID')
 ```
+
+### Query Service Integration
+
+> Requires the `query-service` extra: `pip install keboola-streamlit[query-service]`
+
+Runs SQL in the data app's workspace through the [Keboola Query Service](https://query.keboola.com/api/v1/documentation),
+the SQL path the platform uses when **Storage Access** is enabled in the data app configuration. No Snowflake
+credentials are needed in secrets: the app's Storage token is used.
+
+#### Configuration
+
+When Storage Access is enabled, the platform provides everything through environment variables:
+
+- `QUERY_SERVICE_URL` (otherwise discovered from the Storage API index)
+- `BRANCH_ID`
+- `KBC_WORKSPACE_MANIFEST_PATH` or `WORKSPACE_ID`
+
+Each value can also be passed to the constructor, which takes precedence:
+
+```python
+keboola = KeboolaStreamlit(
+    root_url=os.environ["KBC_URL"],
+    token=os.environ["KBC_TOKEN"],
+    query_service_url="https://query.keboola.com",  # optional
+    branch_id="1234",                               # optional
+    workspace_id="5678",                            # optional
+)
+```
+
+#### Executing a Query
+
+```python
+df = keboola.query_service_execute_query('SELECT * FROM "in.c-main"."customers" LIMIT 100')
+
+# Several statements in one job return one DataFrame per statement
+dfs = keboola.query_service_execute_query(["SELECT 1 AS A", "SELECT 2 AS B"])
+
+# Statements without a result set
+keboola.query_service_execute_query('DELETE FROM "out.c-app"."drafts" WHERE ID = 1', return_df=False)
+```
+
+Query Service returns every value as a string. Numeric columns are converted to numbers by default
+(`coerce_numeric=False` keeps strings). Query Service does not support bind parameters, so escape any user input
+before putting it into SQL.
+
+#### Access Logging
+
+Every `query_service_execute_query` call writes a Storage event of type `keboola_data_app_query_service_query`
+attributed to the logged-in user (`X-Kbc-User-Email` and `X-Kbc-User-Id` headers from the data app proxy). The event
+contains the SQL and the Query Service job ID, so it can be matched with the Query Service query history.
+
+- The event is written right after the job is submitted. If it cannot be written, the job is cancelled and no data
+  is returned, so the app never shows data whose access was not logged.
+- A failed or timed-out query writes a second event of type `keboola_data_app_query_service_query_failed`.
+
+`query_service_get_client()` returns the underlying `keboola_query_service.Client` for advanced use. Queries sent
+through it directly are **not** logged.
 
 ## License
 
