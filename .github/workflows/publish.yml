@@ -38,7 +38,7 @@ jobs:
           uv build --wheel
           uv run --isolated --with dist/*.whl python -c "from keboola_streamlit import KeboolaStreamlit; print('Smoke test passed')"
 
-  test-snowflake-extra:
+  test-extras:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -58,8 +58,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies with snowflake extra
-        run: uv sync --extra snowflake
+      - name: Install dependencies with all extras
+        run: uv sync --all-extras
 
       - name: Run tests
         run: uv run pytest
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - test
-      - test-snowflake-extra
+      - test-extras
     outputs:
       is_deploy_ready: ${{ steps.deploy_ready.outputs.is_deploy_ready }}
       is_default_branch: ${{ steps.default_branch.outputs.is_default_branch }}
@@ -114,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - test
-      - test-snowflake-extra
+      - test-extras
       - publish-event-info
     if: needs.publish-event-info.outputs.is_deploy_ready == 'true'
     steps:

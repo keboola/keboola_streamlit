@@ -19,6 +19,13 @@ If you also need the [Snowflake Integration](#snowflake-integration) functions, 
 pip install keboola-streamlit[snowflake]
 ```
 
+If you query the data app workspace through [Query Service](#query-service-integration), install the
+`query-service` extra:
+
+```bash
+pip install keboola-streamlit[query-service]
+```
+
 _If you are using `streamlit<=1.36.0`, please use version `0.0.5` of the keboola-streamlit package._
 
 ## Usage
@@ -147,6 +154,41 @@ Write a Pandas DataFrame to a Snowflake table:
 ```python
 keboola.snowflake_write_table(session=st.session_state['snowflake_session'], df=your_dataframe, table_id='YOUR_SNOWFLAKE_TABLE_ID')
 ```
+
+### Query Service Integration
+
+> Requires the `query-service` extra: `pip install keboola-streamlit[query-service]`
+
+Turn on **Storage Access** in the data app configuration. Keboola then creates a read-only workspace for the app,
+and the app queries it through the Keboola Query Service. No Snowflake credentials are needed in secrets.
+
+```python
+df = keboola.query_service_execute_query(query='SELECT * FROM "in.c-main"."users" LIMIT 100')
+```
+
+The library finds the workspace and the service from environment variables that Keboola sets:
+
+- workspace ID: the JSON file at `KBC_WORKSPACE_MANIFEST_PATH`, or the `WORKSPACE_ID` variable
+- `BRANCH_ID` (numeric)
+- `QUERY_SERVICE_URL`; when it is not set, the URL is read from the Storage API index
+
+Each query is logged as a Storage event with the logged-in user, the query text and the Query Service job ID:
+
+- `keboola_data_app_query_service_query` is written right after the query is submitted. If it cannot be written,
+  the query is cancelled and no data is returned.
+- `keboola_data_app_query_service_query_failed` is written when the query fails or times out. It also holds the
+  error message.
+
+Query Service returns every value as a string. The library converts number, boolean, date and timestamp columns
+to pandas types based on the column type (timestamps with a time zone are converted to UTC). Columns of other types,
+and columns whose values do not match their type, stay as strings. Pass `convert_types=False` to get only strings.
+
+Other options: `return_df=False` for statements without results, and `max_wait_time` (seconds, default 300) after
+which the query is cancelled.
+
+Query Service does not support bind parameters, so escape any user input before putting it into SQL.
+
+For local development, set `BRANCH_ID` and `WORKSPACE_ID` (and optionally `QUERY_SERVICE_URL`) yourself.
 
 ## License
 
