@@ -5,18 +5,24 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import pandas as pd
 import requests
 import streamlit as st
 from kbcstorage.client import Client
 
+from ._query_service_types import QueryServiceColumn, query_result_to_dataframe
+
 if TYPE_CHECKING:
     from keboola_query_service import Client as QueryServiceClient
     from snowflake.snowpark import Session
 
+
+QUERY_SERVICE_PAGE_SIZE = 5000
+QUERY_SERVICE_SUBMIT_ATTEMPTS = 3
 
 # Configure logging
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -129,7 +135,7 @@ class KeboolaStreamlit:
         message: str = "Streamlit App Create Event",
         endpoint: Optional[str] = None,
         event_data: Optional[str] = None,
-        job_id: Optional[int] = None,
+        job_id: Optional[Union[int, str]] = None,
         event_type: str = "keboola_data_app_create_event",
     ) -> Tuple[Optional[int], Optional[str]]:
         """
@@ -139,7 +145,7 @@ class KeboolaStreamlit:
             message (str): The message for the event.
             endpoint (str): The endpoint for the event.
             event_data (Optional[str]): The data associated with the event.
-            job_id (Optional[int]): The job ID for the event.
+            job_id (Optional[Union[int, str]]): The Storage or Query Service job ID for the event.
             event_type (str): The type of the event. Defaults to 'keboola_data_app_create_event'.
 
         Returns:
@@ -671,3 +677,117 @@ class KeboolaStreamlit:
         if not branch_id.isdigit():
             raise RuntimeError(f"Query Service needs a numeric branch ID, got '{branch_id}'.")
         return branch_id
+
+    def query_service_execute_query(
+        self,
+        query: str,
+        return_df: bool = True,
+        convert_types: bool = True,
+        max_wait_time: float = 300.0,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Executes a SQL query through Query Service on the workspace provisioned for the data app.
+
+        Every query is logged as a Storage event with the logged-in user. The event is written right after the
+        query is submitted. If it cannot be written, the query is cancelled and no data is returned. Fast write
+        statements can still finish before the cancel arrives. A failed query writes a second event with the error.
+
+        Query Service does not support bind parameters, so escape any user input before putting it into SQL.
+
+        Args:
+            query (str): One SQL statement.
+            return_df (bool): Flag to indicate whether to return the result as a Pandas DataFrame. Defaults to True.
+            convert_types (bool): Convert columns from strings to pandas types based on the column type.
+                Defaults to True.
+            max_wait_time (float): Seconds to wait for the query before it is cancelled. Defaults to 300.
+
+        Returns:
+            Optional[pd.DataFrame]: The query results if return_df is True, otherwise None.
+        """
+        try:
+            workspace_id = self._read_workspace_id()
+            branch_id = self._get_branch_id()
+            client = self._get_query_service_client()
+        except ImportError:
+            raise
+        except Exception as e:
+            self._show_query_service_error(e)
+            return None
+
+        from keboola_query_service import JobTimeoutError
+
+        job_id: Optional[str] = None
+        try:
+            job_id = self._submit_query_service_job(client, branch_id, workspace_id, query)
+            status_code, _ = self.create_event(
+                message="Streamlit App Query Service Query",
+                event_type="keboola_data_app_query_service_query",
+                event_data=f"Query: {query}",
+                job_id=job_id,
+            )
+            if status_code is None:
+                self._cancel_query_service_job(client, job_id, "The access event could not be written to Storage.")
+                message = "The query was cancelled because its access event could not be written to Storage."
+                logging.error(message)
+                st.error(message)
+                return None
+
+            try:
+                status = client.wait_for_job(job_id, max_wait_time=max_wait_time)
+            except JobTimeoutError:
+                self._cancel_query_service_job(client, job_id, f"No result within {max_wait_time} seconds.")
+                raise
+            if not return_df:
+                return None
+            columns, rows = self._fetch_query_service_results(client, job_id, status.statements[0].id)
+            return query_result_to_dataframe(columns, rows, convert_types)
+        except Exception as e:
+            self._show_query_service_error(e)
+            self.create_event(
+                message="Streamlit App Query Service Query Failed",
+                event_type="keboola_data_app_query_service_query_failed",
+                event_data=f"Query: {query}\nError: {e}",
+                job_id=job_id,
+            )
+        return None
+
+    @staticmethod
+    def _submit_query_service_job(client: QueryServiceClient, branch_id: str, workspace_id: str, query: str) -> str:
+        from keboola_query_service import QueryServiceError
+
+        for attempt in range(1, QUERY_SERVICE_SUBMIT_ATTEMPTS + 1):
+            try:
+                return client.submit_job(branch_id=branch_id, workspace_id=workspace_id, statements=[query])
+            except QueryServiceError as e:
+                # Query Service gives up on fetching the workspace credentials sooner than they can take to
+                # provision. No job is created in that case, so the submit is safe to repeat.
+                is_credentials_delay = e.status_code == 403 and "workspace credentials" in str(e).lower()
+                if not is_credentials_delay or attempt == QUERY_SERVICE_SUBMIT_ATTEMPTS:
+                    raise
+                logging.warning(f"Query Service could not get workspace credentials (attempt {attempt}), retrying.")
+                time.sleep(attempt)
+        raise RuntimeError("Query Service submit attempts exhausted.")
+
+    @staticmethod
+    def _fetch_query_service_results(
+        client: QueryServiceClient, job_id: str, statement_id: str
+    ) -> Tuple[List[QueryServiceColumn], List[List[Any]]]:
+        rows: List[List[Any]] = []
+        while True:
+            page = client.get_job_results(job_id, statement_id, offset=len(rows), page_size=QUERY_SERVICE_PAGE_SIZE)
+            rows.extend(page.data)
+            is_last_page = len(page.data) < QUERY_SERVICE_PAGE_SIZE
+            if is_last_page or (page.number_of_rows is not None and len(rows) >= page.number_of_rows):
+                return page.columns, rows
+
+    @staticmethod
+    def _cancel_query_service_job(client: QueryServiceClient, job_id: str, reason: str) -> None:
+        try:
+            client.cancel_job(job_id, reason=reason)
+        except Exception as e:
+            logging.error(f"Could not cancel Query Service job {job_id}: {e}")
+
+    @staticmethod
+    def _show_query_service_error(error: Exception) -> None:
+        logging.error(f"An error occurred while executing Query Service query: {error}")
+        st.error(f"An error occurred while executing Query Service query: {error}")
