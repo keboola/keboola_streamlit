@@ -16,8 +16,13 @@ UTC_TIMESTAMP_TYPES = frozenset({"timestamp_ltz", "timestamp_tz"})
 
 BOOLEAN_VALUES = {"true": True, "1": True, "false": False, "0": False}
 INTEGER_PATTERN = re.compile(r"^[+-]?\d+$")
-# Dates must start with YYYY-MM-DD, so epoch numbers are never read as dates.
+# Snowflake sends dates as days and timestamps as seconds since 1970-01-01, followed by the time zone offset
+# for TIMESTAMP_TZ. BigQuery sends ISO dates and timestamps like "2026-10-12 04:05:13 +0000 UTC".
+EPOCH_DAYS_PATTERN = re.compile(r"^-?\d+$")
+EPOCH_SECONDS_PATTERN = re.compile(r"^-?\d+(\.\d+)?( \d+)?$")
+BIGQUERY_TIMESTAMP_PATTERN = re.compile(r"^(\S+) (\S+) \+0000 UTC$")
 ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}")
+NANOSECONDS_PER_DAY = 86_400 * 1_000_000_000
 # pandas 2 guesses one format from the first value and rejects rows that differ (e.g. missing fractions).
 DATETIME_OPTIONS = {"format": "ISO8601"} if int(pd.__version__.split(".")[0]) >= 2 else {}
 
@@ -55,10 +60,12 @@ def _convert_column(values: pd.Series, type_name: Optional[str]) -> pd.Series:
             return pd.to_numeric(values).astype("float64")
         if base_type in BOOLEAN_TYPES:
             return _to_boolean(values)
-        if base_type in DATE_TYPES or base_type in TIMESTAMP_TYPES:
-            return _to_datetime(values, utc=False)
+        if base_type in DATE_TYPES:
+            return _to_date(values)
+        if base_type in TIMESTAMP_TYPES:
+            return _to_timestamp(values, utc=False)
         if base_type in UTC_TIMESTAMP_TYPES:
-            return _to_datetime(values, utc=True)
+            return _to_timestamp(values, utc=True)
     except (ValueError, TypeError, OverflowError):
         pass
     return values
@@ -70,8 +77,12 @@ def _base_type(type_name: Optional[str]) -> str:
     return parts[0]
 
 
+def _all_match(values: pd.Series, pattern: re.Pattern[str]) -> bool:
+    return all(pattern.match(str(value)) for value in values.dropna())
+
+
 def _to_number(values: pd.Series) -> pd.Series:
-    if all(INTEGER_PATTERN.match(str(value)) for value in values.dropna()):
+    if _all_match(values, INTEGER_PATTERN):
         # Built from Python ints: pd.to_numeric goes through float64 when there are NULLs and rounds
         # integers above 2**53. Values outside the int64 range raise here and stay strings.
         integers = [pd.NA if pd.isna(value) else int(value) for value in values]
@@ -91,8 +102,33 @@ def _to_boolean(values: pd.Series) -> pd.Series:
         raise ValueError(f"Unexpected boolean value {e}") from e
 
 
-def _to_datetime(values: pd.Series, utc: bool) -> pd.Series:
-    if not all(ISO_DATE_PATTERN.match(str(value)) for value in values.dropna()):
+def _to_date(values: pd.Series) -> pd.Series:
+    if _all_match(values, EPOCH_DAYS_PATTERN):
+        # Converted to nanoseconds, so dates get the same datetime64[ns] type as timestamps.
+        nanoseconds = [pd.NA if pd.isna(value) else int(value) * NANOSECONDS_PER_DAY for value in values]
+        return pd.to_datetime(pd.Series(nanoseconds, dtype="Int64", index=values.index, name=values.name), unit="ns")
+    return _parse_iso_datetime(values, utc=False)
+
+
+def _to_timestamp(values: pd.Series, utc: bool) -> pd.Series:
+    if _all_match(values, EPOCH_SECONDS_PATTERN):
+        nanoseconds = [pd.NA if pd.isna(value) else _epoch_seconds_to_nanoseconds(str(value)) for value in values]
+        return pd.to_datetime(
+            pd.Series(nanoseconds, dtype="Int64", index=values.index, name=values.name), unit="ns", utc=utc
+        )
+    return _parse_iso_datetime(values.str.replace(BIGQUERY_TIMESTAMP_PATTERN, r"\1T\2Z", regex=True), utc)
+
+
+def _epoch_seconds_to_nanoseconds(value: str) -> int:
+    """Parses the seconds as text, because a float cannot hold nanoseconds of a current date."""
+    seconds = value.split(" ")[0]
+    whole, _, fraction = seconds.lstrip("-").partition(".")
+    nanoseconds = int(whole) * 1_000_000_000 + int((fraction + "000000000")[:9])
+    return -nanoseconds if seconds.startswith("-") else nanoseconds
+
+
+def _parse_iso_datetime(values: pd.Series, utc: bool) -> pd.Series:
+    if not _all_match(values, ISO_DATE_PATTERN):
         raise ValueError("Values are not ISO dates.")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

@@ -40,6 +40,47 @@ def test_numbers_and_booleans(type_name, values, expected_dtype, expected_values
     pd.testing.assert_series_equal(result, expected)
 
 
+def test_snowflake_date_from_epoch_days():
+    result = _convert("DATE", ["19753", "-1", None])
+
+    assert result.dtype == "datetime64[ns]"
+    assert result.iloc[0] == pd.Timestamp("2024-01-31")
+    assert result.iloc[1] == pd.Timestamp("1969-12-31")
+    assert pd.isna(result.iloc[2])
+
+
+def test_snowflake_naive_timestamp_from_epoch_seconds_keeps_nanoseconds():
+    result = _convert("TIMESTAMP_NTZ", ["1706696430.123456789", "-1.5", None])
+
+    assert result.dtype == "datetime64[ns]"
+    assert result.iloc[0] == pd.Timestamp("2024-01-31 10:20:30.123456789")
+    assert result.iloc[1] == pd.Timestamp("1969-12-31 23:59:58.5")
+    assert pd.isna(result.iloc[2])
+
+
+@pytest.mark.parametrize(
+    "type_name, value",
+    [
+        ("TIMESTAMP_TZ", "1706696430.000000000 1500"),
+        ("TIMESTAMP_LTZ", "1706696430.000000000"),
+    ],
+)
+def test_snowflake_timezone_timestamp_from_epoch_seconds_is_utc(type_name, value):
+    result = _convert(type_name, [value])
+
+    assert str(result.dtype) == "datetime64[ns, UTC]"
+    assert result.iloc[0] == pd.Timestamp("2024-01-31 10:20:30", tz="UTC")
+
+
+def test_bigquery_timestamp_is_utc():
+    result = _convert("TIMESTAMP", ["2026-10-12 04:05:13 +0000 UTC", "2026-10-12 04:05:13.25 +0000 UTC", None])
+
+    assert str(result.dtype) == "datetime64[ns, UTC]"
+    assert result.iloc[0] == pd.Timestamp("2026-10-12 04:05:13", tz="UTC")
+    assert result.iloc[1] == pd.Timestamp("2026-10-12 04:05:13.25", tz="UTC")
+    assert pd.isna(result.iloc[2])
+
+
 def test_date():
     result = _convert("DATE", ["2024-01-31", None])
 
@@ -109,9 +150,10 @@ def test_other_types_stay_strings(type_name, values):
     [
         ("NUMBER", ["1", "not a number"]),
         ("BOOLEAN", ["true", "maybe"]),
-        ("DATE", ["19753", "19754"]),
-        ("TIMESTAMP_NTZ", ["1706696430.000000000"]),
         ("DATE", ["2024-13-45"]),
+        ("DATE", ["19753", "2024-01-31"]),
+        ("TIMESTAMP_NTZ", ["1706696430.5", "yesterday"]),
+        ("DATE", ["99999999"]),
     ],
 )
 def test_unexpected_values_stay_strings(type_name, values):
