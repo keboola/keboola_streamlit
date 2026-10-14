@@ -13,6 +13,7 @@ import streamlit as st
 from kbcstorage.client import Client
 
 if TYPE_CHECKING:
+    from keboola_query_service import Client as QueryServiceClient
     from snowflake.snowpark import Session
 
 
@@ -35,6 +36,7 @@ class KeboolaStreamlit:
         self.__root_url = root_url.strip("/")
         self.dev_mockup_headers = None
         self.aggrid_license_key = os.environ.get("AGGRID_LICENSE_KEY")
+        self._query_service_client: Optional[QueryServiceClient] = None
 
     def _get_headers(self) -> dict:
         """
@@ -597,3 +599,32 @@ class KeboolaStreamlit:
         except Exception as e:
             logging.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
             st.error(f"An error occurred while writing to Snowflake table {table_id}: {e}")
+
+    @staticmethod
+    def _require_env(name: str) -> str:
+        value = os.environ.get(name)
+        if not value:
+            raise RuntimeError(
+                f"Environment variable {name} is not set. "
+                "Query Service needs a workspace enabled in the data app configuration."
+            )
+        return value
+
+    def _get_query_service_client(self) -> QueryServiceClient:
+        if self._query_service_client is not None:
+            return self._query_service_client
+        try:
+            from keboola_query_service import Client
+        except ModuleNotFoundError as e:
+            if (e.name or "").split(".", 1)[0] == "keboola_query_service":
+                raise ImportError(
+                    "Query Service support requires an optional dependency. "
+                    "Install it with: pip install keboola-streamlit[query-service]"
+                ) from e
+            raise
+        self._query_service_client = Client(
+            base_url=self._require_env("QUERY_SERVICE_URL"),
+            token=self.__token,
+            user_agent="keboola-streamlit",
+        )
+        return self._query_service_client
