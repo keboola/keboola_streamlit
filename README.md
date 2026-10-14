@@ -162,11 +162,18 @@ keboola.snowflake_write_table(session=st.session_state['snowflake_session'], df=
 
 > Requires the `query-service` extra: `pip install keboola-streamlit[query-service]`
 
-Turn on **Storage Access** in the data app configuration. Keboola then creates a read-only workspace for the app,
-and the app queries it through the Keboola Query Service. No Snowflake credentials are needed in secrets.
+Turn on **Storage Access** in the data app configuration. Keboola then creates a workspace for the app, and the app
+queries it through the Keboola Query Service. The workspace can read the project's Storage, and write to the tables
+in the app's output mapping (direct grant). No Snowflake credentials are needed in secrets.
 
 ```python
 df = keboola.query_service_execute_query(query='SELECT * FROM "in.c-main"."users" LIMIT 100')
+
+# Statements that change data: return_df=False returns the number of affected rows, or None when the query failed.
+rows_affected = keboola.query_service_execute_query(
+    query='UPDATE "in.c-main"."users" SET "active" = FALSE WHERE "id" = \'42\'',
+    return_df=False,
+)
 ```
 
 The library finds the workspace and the service from environment variables that Keboola sets:
@@ -175,11 +182,13 @@ The library finds the workspace and the service from environment variables that 
 - `BRANCH_ID` (numeric)
 - `QUERY_SERVICE_URL`; when it is not set, the URL is read from the Storage API index
 
-Each query is logged as a Storage event with the logged-in user (email and user ID), the query text and the Query
-Service job ID:
+Each query is logged as Storage events with the logged-in user (email and user ID). The events of one query share a
+`request_id`:
 
-- `keboola_data_app_query_service_query` is written right after the query is submitted. If it cannot be written,
-  the query is cancelled and no data is returned.
+- `keboola_data_app_query_service_query` holds the query text and is written **before** the query is sent. If it
+  cannot be written, the query is not sent, so no query runs without an audit entry.
+- `keboola_data_app_query_service_query_submitted` holds the Query Service job ID, to match the query with the Query
+  Service history.
 - `keboola_data_app_query_service_query_failed` is written when the query fails or times out. It also holds the
   error message.
 
@@ -189,8 +198,13 @@ digits), and timestamps with a time zone are converted to UTC. Integers outside 
 types, and columns whose values do not match their type stay as strings. Pass `convert_types=False` to get only
 strings.
 
-Other options: `return_df=False` for statements without results, `max_rows` to read at most that many rows, and
-`max_wait_time` (seconds, default 300) after which the query is cancelled.
+Other options:
+
+- `refresh_metadata` refreshes the Storage metadata of changed tables after the query, so Storage exports show the new
+  data. It is on by default when `return_df=False`; pass `refresh_metadata=True` when a query with `return_df=True`
+  changes data.
+- `max_rows` reads at most that many rows.
+- `max_wait_time` (seconds, default 300) after which the query is cancelled.
 
 Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 

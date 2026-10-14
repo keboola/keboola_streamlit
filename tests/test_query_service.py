@@ -33,7 +33,9 @@ def _page(columns, data, number_of_rows=None):
 def _mock_query_service_module(columns=(("A", "TEXT"),), data=(("1",),)):
     fake_client = MagicMock(name="query_service_client")
     fake_client.submit_job.return_value = "qs-job-1"
-    fake_client.wait_for_job.return_value = SimpleNamespace(statements=[SimpleNamespace(id="stmt-1")])
+    fake_client.wait_for_job.return_value = SimpleNamespace(
+        statements=[SimpleNamespace(id="stmt-1", rows_affected=None)]
+    )
     fake_client.get_job_results.return_value = _page(
         [_column(name, type_) for name, type_ in columns], [list(row) for row in data]
     )
@@ -190,13 +192,45 @@ def test_get_branch_id_rejects_alias(keboola_streamlit, monkeypatch):
         keboola_streamlit._get_branch_id()
 
 
+ACCESS_EVENT = {
+    "message": "Streamlit App Query Service Query",
+    "event_type": "keboola_data_app_query_service_query",
+    "event_data": "Query: SELECT 1",
+    "request_id": "request-1",
+}
+SUBMITTED_EVENT = {
+    "message": "Streamlit App Query Service Query Submitted",
+    "event_type": "keboola_data_app_query_service_query_submitted",
+    "job_id": "qs-job-1",
+    "request_id": "request-1",
+}
+
+
+def _failed_event(error, job_id="qs-job-1"):
+    return {
+        "message": "Streamlit App Query Service Query Failed",
+        "event_type": "keboola_data_app_query_service_query_failed",
+        "event_data": f"Query: SELECT 1\nError: {error}",
+        "job_id": job_id,
+        "request_id": "request-1",
+    }
+
+
+def _events(query_service):
+    return [call.kwargs for call in query_service.app._create_event.call_args_list]
+
+
 @pytest.fixture
 def query_service(keboola_streamlit, query_service_env):
     fake_module, fake_client_cls, fake_client = _mock_query_service_module(
         columns=(("ID", "NUMBER"), ("NAME", "VARCHAR")), data=(("1", "a"), ("2", "b"))
     )
-    keboola_streamlit.create_event = MagicMock(return_value=(201, "{}"))
-    with patch.dict(sys.modules, {"keboola_query_service": fake_module}), patch("streamlit.error") as mock_error:
+    keboola_streamlit._create_event = MagicMock(return_value=(201, "{}"))
+    with (
+        patch.dict(sys.modules, {"keboola_query_service": fake_module}),
+        patch("streamlit.error") as mock_error,
+        patch("uuid.uuid4", return_value=SimpleNamespace(hex="request-1")),
+    ):
         yield SimpleNamespace(app=keboola_streamlit, client=fake_client, client_cls=fake_client_cls, error=mock_error)
 
 
@@ -209,7 +243,9 @@ def test_execute_query_returns_typed_dataframe(query_service):
     assert result["ID"].tolist() == [1, 2]
     assert str(result["ID"].dtype) == "Int64"
     assert result["NAME"].tolist() == ["a", "b"]
-    query_service.client.submit_job.assert_called_once_with(branch_id="678", workspace_id="12345", statements=[query])
+    query_service.client.submit_job.assert_called_once_with(
+        branch_id="678", workspace_id="12345", statements=[query], refresh_metadata_on_success=False
+    )
     query_service.client.wait_for_job.assert_called_once_with("qs-job-1", max_wait_time=300.0)
     query_service.client.get_job_results.assert_called_once_with("qs-job-1", "stmt-1", offset=0, page_size=5000)
 
@@ -220,44 +256,86 @@ def test_execute_query_convert_types_disabled(query_service):
     assert result["ID"].tolist() == ["1", "2"]
 
 
-def test_execute_query_writes_access_event_before_waiting(query_service):
+def test_execute_query_writes_access_event_before_submit(query_service):
     calls = []
-    query_service.app.create_event.side_effect = lambda **kwargs: calls.append("event") or (201, "{}")
+    query_service.app._create_event.side_effect = lambda **kwargs: calls.append(kwargs["event_type"]) or (201, "")
+    query_service.client.submit_job.side_effect = lambda **kwargs: calls.append("submit") or "qs-job-1"
     query_service.client.wait_for_job.side_effect = lambda *args, **kwargs: calls.append("wait") or SimpleNamespace(
-        statements=[SimpleNamespace(id="stmt-1")]
+        statements=[SimpleNamespace(id="stmt-1", rows_affected=None)]
     )
 
     query_service.app.query_service_execute_query("SELECT 1")
 
-    assert calls == ["event", "wait"]
-    query_service.app.create_event.assert_called_once_with(
-        message="Streamlit App Query Service Query",
-        event_type="keboola_data_app_query_service_query",
-        event_data="Query: SELECT 1",
-        job_id="qs-job-1",
-    )
+    assert calls == [
+        "keboola_data_app_query_service_query",
+        "submit",
+        "keboola_data_app_query_service_query_submitted",
+        "wait",
+    ]
+    assert _events(query_service) == [ACCESS_EVENT, SUBMITTED_EVENT]
 
 
-def test_execute_query_cancels_job_when_access_event_fails(query_service):
-    query_service.app.create_event.return_value = (None, None)
+def test_execute_query_sends_nothing_when_access_event_fails(query_service):
+    query_service.app._create_event.return_value = (None, None)
 
-    result = query_service.app.query_service_execute_query("SELECT 1")
+    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False)
 
     assert result is None
-    query_service.client.cancel_job.assert_called_once()
-    assert query_service.client.cancel_job.call_args.args == ("qs-job-1",)
-    query_service.client.wait_for_job.assert_not_called()
-    query_service.client.get_job_results.assert_not_called()
-    query_service.app.create_event.assert_called_once()
+    query_service.client.submit_job.assert_not_called()
+    query_service.app._create_event.assert_called_once()
     assert "access event" in query_service.error.call_args[0][0]
 
 
-def test_execute_query_without_return_df(query_service):
+def test_execute_query_continues_when_submitted_event_fails(query_service):
+    query_service.app._create_event.side_effect = [(201, ""), (None, None)]
+
+    result = query_service.app.query_service_execute_query("SELECT 1")
+
+    assert result["NAME"].tolist() == ["a", "b"]
+    query_service.client.cancel_job.assert_not_called()
+
+
+@pytest.mark.parametrize("rows_affected", [3, 0])
+def test_execute_query_without_return_df_returns_rows_affected(query_service, rows_affected):
+    query_service.client.wait_for_job.return_value = SimpleNamespace(
+        statements=[SimpleNamespace(id="stmt-1", rows_affected=rows_affected)]
+    )
+
     result = query_service.app.query_service_execute_query("DELETE FROM t", return_df=False)
 
-    assert result is None
-    query_service.client.wait_for_job.assert_called_once()
+    assert result == rows_affected
     query_service.client.get_job_results.assert_not_called()
+
+
+def test_execute_query_without_return_df_and_no_rows_affected(query_service):
+    result = query_service.app.query_service_execute_query("CREATE TABLE t (a INT)", return_df=False)
+
+    assert result == 0
+
+
+def test_execute_query_failed_write_returns_none(query_service):
+    query_service.client.wait_for_job.side_effect = FakeQueryServiceError("SQL compilation error")
+
+    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False)
+
+    assert result is None
+
+
+@pytest.mark.parametrize(
+    "return_df, refresh_metadata, expected",
+    [
+        (True, None, False),
+        (False, None, True),
+        (True, True, True),
+        (False, False, False),
+    ],
+)
+def test_execute_query_refreshes_metadata_for_writes(query_service, return_df, refresh_metadata, expected):
+    query_service.app.query_service_execute_query(
+        "UPDATE t SET a = 1", return_df=return_df, refresh_metadata=refresh_metadata
+    )
+
+    assert query_service.client.submit_job.call_args.kwargs["refresh_metadata_on_success"] is expected
 
 
 def test_execute_query_reads_all_pages(query_service):
@@ -308,16 +386,11 @@ def test_execute_query_no_columns(query_service):
 def test_execute_query_failure_writes_failed_event(query_service):
     query_service.client.wait_for_job.side_effect = FakeQueryServiceError("SQL compilation error")
 
-    result = query_service.app.query_service_execute_query("SELEC 1")
+    result = query_service.app.query_service_execute_query("SELECT 1")
 
     assert result is None
     assert "SQL compilation error" in query_service.error.call_args[0][0]
-    assert query_service.app.create_event.call_args_list[-1].kwargs == {
-        "message": "Streamlit App Query Service Query Failed",
-        "event_type": "keboola_data_app_query_service_query_failed",
-        "event_data": "Query: SELEC 1\nError: SQL compilation error",
-        "job_id": "qs-job-1",
-    }
+    assert _events(query_service) == [ACCESS_EVENT, SUBMITTED_EVENT, _failed_event("SQL compilation error")]
 
 
 def test_execute_query_submit_failure_writes_failed_event_without_job_id(query_service):
@@ -327,12 +400,7 @@ def test_execute_query_submit_failure_writes_failed_event_without_job_id(query_s
 
     assert result is None
     query_service.client.submit_job.assert_called_once()
-    query_service.app.create_event.assert_called_once_with(
-        message="Streamlit App Query Service Query Failed",
-        event_type="keboola_data_app_query_service_query_failed",
-        event_data="Query: SELECT 1\nError: Forbidden",
-        job_id=None,
-    )
+    assert _events(query_service) == [ACCESS_EVENT, _failed_event("Forbidden", job_id=None)]
 
 
 def test_execute_query_timeout_cancels_job(query_service):
@@ -344,9 +412,7 @@ def test_execute_query_timeout_cancels_job(query_service):
     query_service.client.wait_for_job.assert_called_once_with("qs-job-1", max_wait_time=5)
     query_service.client.cancel_job.assert_called_once()
     assert query_service.client.cancel_job.call_args.args == ("qs-job-1",)
-    assert (
-        query_service.app.create_event.call_args.kwargs["event_type"] == "keboola_data_app_query_service_query_failed"
-    )
+    assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s")
 
 
 def test_execute_query_cancel_failure_keeps_original_error(query_service):
@@ -370,6 +436,7 @@ def test_execute_query_retries_workspace_credentials_error(query_service):
     assert not result.empty
     assert query_service.client.submit_job.call_count == 2
     mock_sleep.assert_called_once_with(1)
+    assert _events(query_service) == [ACCESS_EVENT, SUBMITTED_EVENT]
 
 
 def test_execute_query_gives_up_after_three_credentials_errors(query_service):
@@ -393,7 +460,7 @@ def test_execute_query_without_workspace_writes_no_event(query_service, monkeypa
     assert result is None
     assert "KBC_WORKSPACE_MANIFEST_PATH" in query_service.error.call_args[0][0]
     query_service.client_cls.assert_not_called()
-    query_service.app.create_event.assert_not_called()
+    query_service.app._create_event.assert_not_called()
 
 
 def test_execute_query_without_extra(keboola_streamlit, query_service_env):
@@ -416,21 +483,29 @@ def test_execute_query_without_extra(keboola_streamlit, query_service_env):
         ({}, "Unknown"),
     ],
 )
-def test_execute_query_event_contains_user(keboola_streamlit, query_service_env, headers, expected_user):
+def test_execute_query_events_contain_user(keboola_streamlit, query_service_env, headers, expected_user):
     fake_module, _, _ = _mock_query_service_module()
     keboola_streamlit.set_dev_mockup_headers(headers)
 
-    with patch.dict(sys.modules, {"keboola_query_service": fake_module}), patch("requests.post") as mock_post:
+    with (
+        patch.dict(sys.modules, {"keboola_query_service": fake_module}),
+        patch("requests.post") as mock_post,
+        patch("uuid.uuid4", return_value=SimpleNamespace(hex="request-1")),
+    ):
         mock_post.return_value.status_code = 201
         result = keboola_streamlit.query_service_execute_query("SELECT 1")
 
     assert not result.empty
-    params = mock_post.call_args.kwargs["json"]["params"]
-    assert params["user"] == expected_user
-    assert params.get("user_id") == headers.get("X-Kbc-User-Id")
-    assert params["event_type"] == "keboola_data_app_query_service_query"
-    assert params["event_job_id"] == "qs-job-1"
-    assert params["event_data"] == "Query: SELECT 1"
+    access, submitted = [call.kwargs["json"]["params"] for call in mock_post.call_args_list]
+    for params in (access, submitted):
+        assert params["user"] == expected_user
+        assert params.get("user_id") == headers.get("X-Kbc-User-Id")
+        assert params["request_id"] == "request-1"
+    assert access["event_type"] == "keboola_data_app_query_service_query"
+    assert access["event_data"] == "Query: SELECT 1"
+    assert "event_job_id" not in access
+    assert submitted["event_type"] == "keboola_data_app_query_service_query_submitted"
+    assert submitted["event_job_id"] == "qs-job-1"
 
 
 def test_execute_query_max_rows_within_one_page(query_service):

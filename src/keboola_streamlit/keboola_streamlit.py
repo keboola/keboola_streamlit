@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from snowflake.snowpark import Session
 
 
+EVENT_TIMEOUT_SECONDS = 30
 QUERY_SERVICE_PAGE_SIZE = 5000
 QUERY_SERVICE_SUBMIT_ATTEMPTS = 3
 
@@ -151,6 +152,19 @@ class KeboolaStreamlit:
         Returns:
             Tuple[int, str]: The response status code and response text.
         """
+        return self._create_event(
+            message=message, endpoint=endpoint, event_data=event_data, job_id=job_id, event_type=event_type
+        )
+
+    def _create_event(
+        self,
+        message: str,
+        event_type: str,
+        endpoint: Optional[str] = None,
+        event_data: Optional[str] = None,
+        job_id: Optional[Union[int, str]] = None,
+        request_id: Optional[str] = None,
+    ) -> Tuple[Optional[int], Optional[str]]:
         headers = self._get_headers()
         url = f"{self.__root_url}/v2/storage/events"
         requestHeaders = {
@@ -184,9 +198,11 @@ class KeboolaStreamlit:
             requestData["params"]["event_data"] = f"{event_data}"
         if job_id is not None:
             requestData["params"]["event_job_id"] = job_id
+        if request_id is not None:
+            requestData["params"]["request_id"] = request_id
 
         try:
-            response = requests.post(url, headers=requestHeaders, json=requestData)
+            response = requests.post(url, headers=requestHeaders, json=requestData, timeout=EVENT_TIMEOUT_SECONDS)
             response.raise_for_status()
             return response.status_code, response.text
         except Exception as e:
@@ -691,26 +707,31 @@ class KeboolaStreamlit:
         convert_types: bool = True,
         max_wait_time: float = 300.0,
         max_rows: Optional[int] = None,
-    ) -> Optional[pd.DataFrame]:
+        refresh_metadata: Optional[bool] = None,
+    ) -> Union[pd.DataFrame, int, None]:
         """
         Executes a SQL query through Query Service on the workspace provisioned for the data app.
 
-        Every query is logged as a Storage event with the logged-in user. The event is written right after the
-        query is submitted. If it cannot be written, the query is cancelled and no data is returned. Fast write
-        statements can still finish before the cancel arrives. A failed query writes a second event with the error.
+        Every query is logged as a Storage event with the logged-in user before it is sent. If that event cannot be
+        written, the query is not sent. A second event links the event's request ID to the Query Service job ID,
+        and a failed query writes a third event with the error.
 
         Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
         Args:
             query (str): One SQL statement.
-            return_df (bool): Flag to indicate whether to return the result as a Pandas DataFrame. Defaults to True.
+            return_df (bool): Flag to indicate whether to return the result as a Pandas DataFrame. Use False for
+                statements that change data. Defaults to True.
             convert_types (bool): Convert columns from strings to pandas types based on the column type.
                 Defaults to True.
             max_wait_time (float): Seconds to wait for the query before it is cancelled. Defaults to 300.
             max_rows (Optional[int]): The maximum number of rows to read. Defaults to all rows.
+            refresh_metadata (Optional[bool]): Refresh the Storage metadata of changed tables after the query, so
+                Storage exports show the new data. Defaults to True when return_df is False, otherwise False.
 
         Returns:
-            Optional[pd.DataFrame]: The query results if return_df is True, otherwise None.
+            Union[pd.DataFrame, int, None]: The query results if return_df is True, otherwise the number of affected
+            rows. None when the query failed.
         """
         if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0):
             raise ValueError(f"max_rows must be a positive integer, got {max_rows!r}.")
@@ -726,48 +747,69 @@ class KeboolaStreamlit:
 
         from keboola_query_service import JobTimeoutError
 
+        request_id = uuid.uuid4().hex
+        status_code, _ = self._create_event(
+            message="Streamlit App Query Service Query",
+            event_type="keboola_data_app_query_service_query",
+            event_data=f"Query: {query}",
+            request_id=request_id,
+        )
+        if status_code is None:
+            message = "The query was not sent because its access event could not be written to Storage."
+            logging.error(message)
+            st.error(message)
+            return None
+
         job_id: Optional[str] = None
         try:
-            job_id = self._submit_query_service_job(client, branch_id, workspace_id, query)
-            status_code, _ = self.create_event(
-                message="Streamlit App Query Service Query",
-                event_type="keboola_data_app_query_service_query",
-                event_data=f"Query: {query}",
-                job_id=job_id,
+            job_id = self._submit_query_service_job(
+                client,
+                branch_id,
+                workspace_id,
+                query,
+                refresh_metadata=not return_df if refresh_metadata is None else refresh_metadata,
             )
-            if status_code is None:
-                self._cancel_query_service_job(client, job_id, "The access event could not be written to Storage.")
-                message = "The query was cancelled because its access event could not be written to Storage."
-                logging.error(message)
-                st.error(message)
-                return None
-
+            self._create_event(
+                message="Streamlit App Query Service Query Submitted",
+                event_type="keboola_data_app_query_service_query_submitted",
+                job_id=job_id,
+                request_id=request_id,
+            )
             try:
                 status = client.wait_for_job(job_id, max_wait_time=max_wait_time)
             except JobTimeoutError:
                 self._cancel_query_service_job(client, job_id, f"No result within {max_wait_time} seconds.")
                 raise
+            statement = status.statements[0]
             if not return_df:
-                return None
-            columns, rows = self._fetch_query_service_results(client, job_id, status.statements[0].id, max_rows)
+                return statement.rows_affected or 0
+            columns, rows = self._fetch_query_service_results(client, job_id, statement.id, max_rows)
             return query_result_to_dataframe(columns, rows, convert_types)
         except Exception as e:
             self._show_query_service_error(e)
-            self.create_event(
+            self._create_event(
                 message="Streamlit App Query Service Query Failed",
                 event_type="keboola_data_app_query_service_query_failed",
                 event_data=f"Query: {query}\nError: {e}",
                 job_id=job_id,
+                request_id=request_id,
             )
         return None
 
     @staticmethod
-    def _submit_query_service_job(client: QueryServiceClient, branch_id: str, workspace_id: str, query: str) -> str:
+    def _submit_query_service_job(
+        client: QueryServiceClient, branch_id: str, workspace_id: str, query: str, refresh_metadata: bool
+    ) -> str:
         from keboola_query_service import QueryServiceError
 
         for attempt in range(1, QUERY_SERVICE_SUBMIT_ATTEMPTS + 1):
             try:
-                return client.submit_job(branch_id=branch_id, workspace_id=workspace_id, statements=[query])
+                return client.submit_job(
+                    branch_id=branch_id,
+                    workspace_id=workspace_id,
+                    statements=[query],
+                    refresh_metadata_on_success=refresh_metadata,
+                )
             except QueryServiceError as e:
                 # Query Service gives up on fetching the workspace credentials sooner than they can take to
                 # provision. No job is created in that case, so the submit is safe to repeat.
