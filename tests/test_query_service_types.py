@@ -1,6 +1,7 @@
 import os
 import sys
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -70,6 +71,20 @@ def test_timestamp_with_mixed_offsets_falls_back_to_utc():
     assert str(result.dtype) == "datetime64[ns, UTC]"
 
 
+def test_timestamp_falls_back_to_utc_when_pandas_rejects_mixed_offsets():
+    real_to_datetime = pd.to_datetime
+
+    def to_datetime_like_pandas_3(values, utc=False, **kwargs):
+        if not utc:
+            raise ValueError("Mixed timezones detected. Pass utc=True in to_datetime")
+        return real_to_datetime(values, utc=utc, **kwargs)
+
+    with patch("pandas.to_datetime", side_effect=to_datetime_like_pandas_3):
+        result = _convert("TIMESTAMP", ["2024-01-31T10:00:00Z", "2024-01-31 10:00:00 +01:00"])
+
+    assert str(result.dtype) == "datetime64[ns, UTC]"
+
+
 @pytest.mark.parametrize(
     "type_name, values",
     [
@@ -103,6 +118,14 @@ def test_unexpected_values_stay_strings(type_name, values):
     result = _convert(type_name, values)
 
     assert result.tolist() == values
+
+
+@pytest.mark.parametrize("values", [["9007199254740993", None], ["9007199254740993", "1"]])
+def test_large_integer_keeps_precision(values):
+    result = _convert("NUMBER(38,0)", values)
+
+    assert str(result.dtype) == "Int64"
+    assert result.iloc[0] == 9007199254740993
 
 
 def test_integer_too_large_for_int64_stays_string_to_keep_precision():

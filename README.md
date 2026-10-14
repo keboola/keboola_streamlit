@@ -180,8 +180,10 @@ Each query is logged as a Storage event with the logged-in user, the query text 
   error message.
 
 Query Service returns every value as a string. The library converts number, boolean, date and timestamp columns
-to pandas types based on the column type (timestamps with a time zone are converted to UTC). Columns of other types,
-and columns whose values do not match their type, stay as strings. Pass `convert_types=False` to get only strings.
+to pandas types based on the column type. Integers become `Int64`, decimals become `float64` (about 15 significant
+digits), and timestamps with a time zone are converted to UTC. Integers outside the `Int64` range, columns of other
+types, and columns whose values do not match their type stay as strings. Pass `convert_types=False` to get only
+strings.
 
 Other options: `return_df=False` for statements without results, and `max_wait_time` (seconds, default 300) after
 which the query is cancelled.

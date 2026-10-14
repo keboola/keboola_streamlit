@@ -284,6 +284,19 @@ def test_execute_query_stops_paging_at_number_of_rows(query_service):
     query_service.client.get_job_results.assert_called_once()
 
 
+def test_execute_query_keeps_columns_of_first_page(query_service):
+    columns = [_column("N", "NUMBER")]
+    query_service.client.get_job_results.side_effect = [
+        _page(columns, [[str(i)] for i in range(5000)]),
+        _page([], []),
+    ]
+
+    result = query_service.app.query_service_execute_query("SELECT N FROM exactly_one_page")
+
+    assert list(result.columns) == ["N"]
+    assert len(result) == 5000
+
+
 def test_execute_query_no_columns(query_service):
     query_service.client.get_job_results.return_value = _page([], [])
 

@@ -772,13 +772,16 @@ class KeboolaStreamlit:
     def _fetch_query_service_results(
         client: QueryServiceClient, job_id: str, statement_id: str
     ) -> Tuple[List[QueryServiceColumn], List[List[Any]]]:
+        columns: Optional[List[QueryServiceColumn]] = None
         rows: List[List[Any]] = []
         while True:
             page = client.get_job_results(job_id, statement_id, offset=len(rows), page_size=QUERY_SERVICE_PAGE_SIZE)
+            if columns is None:
+                columns = page.columns
             rows.extend(page.data)
             is_last_page = len(page.data) < QUERY_SERVICE_PAGE_SIZE
             if is_last_page or (page.number_of_rows is not None and len(rows) >= page.number_of_rows):
-                return page.columns, rows
+                return columns, rows
 
     @staticmethod
     def _cancel_query_service_job(client: QueryServiceClient, job_id: str, reason: str) -> None:

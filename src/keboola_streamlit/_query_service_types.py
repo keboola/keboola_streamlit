@@ -71,13 +71,12 @@ def _base_type(type_name: Optional[str]) -> str:
 
 
 def _to_number(values: pd.Series) -> pd.Series:
-    numbers = pd.to_numeric(values)
     if all(INTEGER_PATTERN.match(str(value)) for value in values.dropna()):
-        try:
-            return numbers.astype("Int64")
-        except (ValueError, TypeError, OverflowError):
-            return numbers
-    return numbers.astype("float64")
+        # Built from Python ints: pd.to_numeric goes through float64 when there are NULLs and rounds
+        # integers above 2**53. Values outside the int64 range raise here and stay strings.
+        integers = [pd.NA if pd.isna(value) else int(value) for value in values]
+        return pd.Series(pd.array(integers, dtype="Int64"), index=values.index, name=values.name)
+    return pd.to_numeric(values).astype("float64")
 
 
 def _to_boolean(values: pd.Series) -> pd.Series:
@@ -97,7 +96,11 @@ def _to_datetime(values: pd.Series, utc: bool) -> pd.Series:
         raise ValueError("Values are not ISO dates.")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        converted = pd.to_datetime(values, utc=utc, **DATETIME_OPTIONS)
-        if not pd.api.types.is_datetime64_any_dtype(converted):
+        try:
+            converted = pd.to_datetime(values, utc=utc, **DATETIME_OPTIONS)
+        except ValueError:
+            converted = None
+        # Values with different UTC offsets give an object column in pandas 2 and an error in pandas 3.
+        if converted is None or not pd.api.types.is_datetime64_any_dtype(converted):
             converted = pd.to_datetime(values, utc=True, **DATETIME_OPTIONS)
     return converted
