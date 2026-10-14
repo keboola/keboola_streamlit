@@ -79,6 +79,42 @@ def test_get_query_service_client_is_created_once(keboola_streamlit, query_servi
     )
 
 
+def test_query_service_url_from_storage_index(keboola_streamlit, monkeypatch):
+    monkeypatch.delenv("QUERY_SERVICE_URL", raising=False)
+    index = {
+        "services": [
+            {"id": "import", "url": "https://import.example.com"},
+            {"id": "query", "url": "https://q.example.com"},
+        ]
+    }
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.json.return_value = index
+        assert keboola_streamlit._get_query_service_url() == "https://q.example.com"
+
+    mock_get.assert_called_once_with(
+        "https://example.com/v2/storage",
+        params={"exclude": "components"},
+        headers={"X-StorageApi-Token": "dummy_token"},
+        timeout=10,
+    )
+
+
+def test_query_service_url_env_wins(keboola_streamlit, query_service_env):
+    with patch("requests.get") as mock_get:
+        assert keboola_streamlit._get_query_service_url() == "https://query.example.com"
+    mock_get.assert_not_called()
+
+
+def test_query_service_url_not_in_storage_index(keboola_streamlit, monkeypatch):
+    monkeypatch.delenv("QUERY_SERVICE_URL", raising=False)
+
+    with patch("requests.get") as mock_get:
+        mock_get.return_value.json.return_value = {"services": []}
+        with pytest.raises(RuntimeError, match="QUERY_SERVICE_URL"):
+            keboola_streamlit._get_query_service_url()
+
+
 def test_require_env_missing(monkeypatch):
     monkeypatch.delenv("QUERY_SERVICE_URL", raising=False)
     with pytest.raises(RuntimeError, match="QUERY_SERVICE_URL"):
@@ -94,9 +130,28 @@ def test_read_workspace_id_numeric(keboola_streamlit, query_service_env):
     assert keboola_streamlit._read_workspace_id() == "12345"
 
 
-def test_read_workspace_id_without_env(keboola_streamlit, monkeypatch):
+def test_read_workspace_id_from_env_without_manifest(keboola_streamlit, monkeypatch):
     monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
-    with pytest.raises(RuntimeError, match="KBC_WORKSPACE_MANIFEST_PATH"):
+    monkeypatch.setenv("WORKSPACE_ID", "999")
+    assert keboola_streamlit._read_workspace_id() == "999"
+
+
+def test_read_workspace_id_manifest_wins_over_env(keboola_streamlit, query_service_env, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_ID", "999")
+    assert keboola_streamlit._read_workspace_id() == "12345"
+
+
+def test_read_workspace_id_without_manifest_and_env(keboola_streamlit, monkeypatch):
+    monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
+    monkeypatch.delenv("WORKSPACE_ID", raising=False)
+    with pytest.raises(RuntimeError, match="KBC_WORKSPACE_MANIFEST_PATH.*WORKSPACE_ID"):
+        keboola_streamlit._read_workspace_id()
+
+
+def test_read_workspace_id_rejects_non_numeric_env(keboola_streamlit, monkeypatch):
+    monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
+    monkeypatch.setenv("WORKSPACE_ID", "WORKSPACE_999")
+    with pytest.raises(RuntimeError, match="numeric"):
         keboola_streamlit._read_workspace_id()
 
 

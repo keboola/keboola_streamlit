@@ -624,19 +624,47 @@ class KeboolaStreamlit:
                 ) from e
             raise
         self._query_service_client = Client(
-            base_url=self._require_env("QUERY_SERVICE_URL"),
+            base_url=self._get_query_service_url(),
             token=self.__token,
             user_agent="keboola-streamlit",
         )
         return self._query_service_client
 
+    def _get_query_service_url(self) -> str:
+        url = os.environ.get("QUERY_SERVICE_URL")
+        if url:
+            return url
+        # Apps that get the workspace through the deprecated WORKSPACE_ID secret, and local runs, have no
+        # QUERY_SERVICE_URL, but the Storage API index lists the Query Service of the stack.
+        response = requests.get(
+            f"{self.__root_url}/v2/storage",
+            params={"exclude": "components"},
+            headers={"X-StorageApi-Token": self.__token},
+            timeout=10,
+        )
+        response.raise_for_status()
+        for service in response.json().get("services", []):
+            if service.get("id") == "query" and service.get("url"):
+                return service["url"]
+        raise RuntimeError("QUERY_SERVICE_URL is not set and the Storage API index does not list the Query Service.")
+
     def _read_workspace_id(self) -> str:
-        manifest_path = self._require_env("KBC_WORKSPACE_MANIFEST_PATH")
-        with open(manifest_path, encoding="utf-8") as manifest_file:
-            workspace_id = json.load(manifest_file).get("workspaceId")
+        manifest_path = os.environ.get("KBC_WORKSPACE_MANIFEST_PATH")
+        if manifest_path:
+            with open(manifest_path, encoding="utf-8") as manifest_file:
+                workspace_id = json.load(manifest_file).get("workspaceId")
+            if not workspace_id:
+                raise RuntimeError(f"Workspace manifest {manifest_path} does not contain workspaceId.")
+            return str(workspace_id)
+        workspace_id = os.environ.get("WORKSPACE_ID")
         if not workspace_id:
-            raise RuntimeError(f"Workspace manifest {manifest_path} does not contain workspaceId.")
-        return str(workspace_id)
+            raise RuntimeError(
+                "Neither KBC_WORKSPACE_MANIFEST_PATH nor WORKSPACE_ID is set. "
+                "Turn on Storage Access in the data app configuration."
+            )
+        if not workspace_id.isdigit():
+            raise RuntimeError(f"WORKSPACE_ID must be a numeric workspace ID, got '{workspace_id}'.")
+        return workspace_id
 
     def _get_branch_id(self) -> str:
         branch_id = self._require_env("BRANCH_ID")
