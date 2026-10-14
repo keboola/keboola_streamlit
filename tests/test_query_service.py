@@ -423,3 +423,37 @@ def test_execute_query_event_contains_user(keboola_streamlit, query_service_env,
     assert params["event_type"] == "keboola_data_app_query_service_query"
     assert params["event_job_id"] == "qs-job-1"
     assert params["event_data"] == "Query: SELECT 1"
+
+
+def test_execute_query_max_rows_within_one_page(query_service):
+    columns = [_column("N", "NUMBER")]
+    query_service.client.get_job_results.return_value = _page(columns, [[str(i)] for i in range(5)], 100)
+
+    result = query_service.app.query_service_execute_query("SELECT N FROM t", max_rows=3)
+
+    assert result["N"].tolist() == [0, 1, 2]
+    query_service.client.get_job_results.assert_called_once_with("qs-job-1", "stmt-1", offset=0, page_size=3)
+
+
+def test_execute_query_max_rows_across_pages(query_service):
+    columns = [_column("N", "NUMBER")]
+    query_service.client.get_job_results.side_effect = [
+        _page(columns, [[str(i)] for i in range(5000)], 10000),
+        _page(columns, [[str(i)] for i in range(5000, 7000)], 10000),
+    ]
+
+    result = query_service.app.query_service_execute_query("SELECT N FROM t", max_rows=7000)
+
+    assert len(result) == 7000
+    assert [call.kwargs for call in query_service.client.get_job_results.call_args_list] == [
+        {"offset": 0, "page_size": 5000},
+        {"offset": 5000, "page_size": 2000},
+    ]
+
+
+@pytest.mark.parametrize("max_rows", [0, -1, True, 1.5])
+def test_execute_query_rejects_invalid_max_rows(query_service, max_rows):
+    with pytest.raises(ValueError, match="max_rows"):
+        query_service.app.query_service_execute_query("SELECT 1", max_rows=max_rows)
+
+    query_service.client.submit_job.assert_not_called()

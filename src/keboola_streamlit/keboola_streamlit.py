@@ -684,6 +684,7 @@ class KeboolaStreamlit:
         return_df: bool = True,
         convert_types: bool = True,
         max_wait_time: float = 300.0,
+        max_rows: Optional[int] = None,
     ) -> Optional[pd.DataFrame]:
         """
         Executes a SQL query through Query Service on the workspace provisioned for the data app.
@@ -700,10 +701,13 @@ class KeboolaStreamlit:
             convert_types (bool): Convert columns from strings to pandas types based on the column type.
                 Defaults to True.
             max_wait_time (float): Seconds to wait for the query before it is cancelled. Defaults to 300.
+            max_rows (Optional[int]): The maximum number of rows to read. Defaults to all rows.
 
         Returns:
             Optional[pd.DataFrame]: The query results if return_df is True, otherwise None.
         """
+        if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0):
+            raise ValueError(f"max_rows must be a positive integer, got {max_rows!r}.")
         try:
             workspace_id = self._read_workspace_id()
             branch_id = self._get_branch_id()
@@ -739,7 +743,7 @@ class KeboolaStreamlit:
                 raise
             if not return_df:
                 return None
-            columns, rows = self._fetch_query_service_results(client, job_id, status.statements[0].id)
+            columns, rows = self._fetch_query_service_results(client, job_id, status.statements[0].id, max_rows)
             return query_result_to_dataframe(columns, rows, convert_types)
         except Exception as e:
             self._show_query_service_error(e)
@@ -770,18 +774,24 @@ class KeboolaStreamlit:
 
     @staticmethod
     def _fetch_query_service_results(
-        client: QueryServiceClient, job_id: str, statement_id: str
+        client: QueryServiceClient, job_id: str, statement_id: str, max_rows: Optional[int]
     ) -> Tuple[List[QueryServiceColumn], List[List[Any]]]:
         columns: Optional[List[QueryServiceColumn]] = None
         rows: List[List[Any]] = []
         while True:
-            page = client.get_job_results(job_id, statement_id, offset=len(rows), page_size=QUERY_SERVICE_PAGE_SIZE)
+            page_size = (
+                QUERY_SERVICE_PAGE_SIZE if max_rows is None else min(QUERY_SERVICE_PAGE_SIZE, max_rows - len(rows))
+            )
+            page = client.get_job_results(job_id, statement_id, offset=len(rows), page_size=page_size)
             if columns is None:
                 columns = page.columns
             rows.extend(page.data)
-            is_last_page = len(page.data) < QUERY_SERVICE_PAGE_SIZE
-            if is_last_page or (page.number_of_rows is not None and len(rows) >= page.number_of_rows):
-                return columns, rows
+            is_last_page = len(page.data) < page_size
+            has_all_rows = page.number_of_rows is not None and len(rows) >= page.number_of_rows
+            has_max_rows = max_rows is not None and len(rows) >= max_rows
+            if is_last_page or has_all_rows or has_max_rows:
+                # A page can hold more rows than asked for if Query Service applies a minimum page size.
+                return columns, rows if max_rows is None else rows[:max_rows]
 
     @staticmethod
     def _cancel_query_service_job(client: QueryServiceClient, job_id: str, reason: str) -> None:

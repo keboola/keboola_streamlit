@@ -185,8 +185,8 @@ digits), and timestamps with a time zone are converted to UTC. Integers outside 
 types, and columns whose values do not match their type stay as strings. Pass `convert_types=False` to get only
 strings.
 
-Other options: `return_df=False` for statements without results, and `max_wait_time` (seconds, default 300) after
-which the query is cancelled.
+Other options: `return_df=False` for statements without results, `max_rows` to read at most that many rows, and
+`max_wait_time` (seconds, default 300) after which the query is cancelled.
 
 Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
