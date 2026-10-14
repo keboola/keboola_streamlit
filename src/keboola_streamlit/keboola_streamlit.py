@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import os
 import re
@@ -628,3 +629,17 @@ class KeboolaStreamlit:
             user_agent="keboola-streamlit",
         )
         return self._query_service_client
+
+    def _read_workspace_id(self) -> str:
+        manifest_path = self._require_env("KBC_WORKSPACE_MANIFEST_PATH")
+        with open(manifest_path, encoding="utf-8") as manifest_file:
+            workspace_id = json.load(manifest_file).get("workspaceId")
+        if not workspace_id:
+            raise RuntimeError(f"Workspace manifest {manifest_path} does not contain workspaceId.")
+        return str(workspace_id)
+
+    def _get_branch_id(self) -> str:
+        branch_id = self._require_env("BRANCH_ID")
+        if not branch_id.isdigit():
+            raise RuntimeError(f"Query Service needs a numeric branch ID, got '{branch_id}'.")
+        return branch_id

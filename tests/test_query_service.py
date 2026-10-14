@@ -83,3 +83,40 @@ def test_require_env_missing(monkeypatch):
     monkeypatch.delenv("QUERY_SERVICE_URL", raising=False)
     with pytest.raises(RuntimeError, match="QUERY_SERVICE_URL"):
         KeboolaStreamlit._require_env("QUERY_SERVICE_URL")
+
+
+def test_read_workspace_id(keboola_streamlit, query_service_env):
+    assert keboola_streamlit._read_workspace_id() == "12345"
+
+
+def test_read_workspace_id_numeric(keboola_streamlit, query_service_env):
+    query_service_env.write_text('{"workspaceId": 12345}')
+    assert keboola_streamlit._read_workspace_id() == "12345"
+
+
+def test_read_workspace_id_without_env(keboola_streamlit, monkeypatch):
+    monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
+    with pytest.raises(RuntimeError, match="KBC_WORKSPACE_MANIFEST_PATH"):
+        keboola_streamlit._read_workspace_id()
+
+
+def test_read_workspace_id_missing_key(keboola_streamlit, query_service_env):
+    query_service_env.write_text("{}")
+    with pytest.raises(RuntimeError, match="workspaceId"):
+        keboola_streamlit._read_workspace_id()
+
+
+def test_read_workspace_id_missing_file(keboola_streamlit, monkeypatch, tmp_path):
+    monkeypatch.setenv("KBC_WORKSPACE_MANIFEST_PATH", str(tmp_path / "missing.json"))
+    with pytest.raises(FileNotFoundError):
+        keboola_streamlit._read_workspace_id()
+
+
+def test_get_branch_id(keboola_streamlit, query_service_env):
+    assert keboola_streamlit._get_branch_id() == "678"
+
+
+def test_get_branch_id_rejects_alias(keboola_streamlit, monkeypatch):
+    monkeypatch.setenv("BRANCH_ID", "default")
+    with pytest.raises(RuntimeError, match="numeric"):
+        keboola_streamlit._get_branch_id()
