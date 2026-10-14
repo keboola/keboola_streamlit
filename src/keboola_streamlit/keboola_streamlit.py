@@ -169,6 +169,12 @@ class KeboolaStreamlit:
             },
         }
 
+        # The apps proxy sends the identity provider's user ID (OIDC subject, GitHub login), which stays the same
+        # when the email changes. Password and no-auth apps have none.
+        user_id = headers.get("X-Kbc-User-Id")
+        if user_id:
+            requestData["params"]["user_id"] = user_id
+
         if event_application != "Unknown":
             match = re.search(r"https://.*-(\d+)\.", event_application)
             if match:

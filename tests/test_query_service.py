@@ -405,7 +405,14 @@ def test_execute_query_without_extra(keboola_streamlit, query_service_env):
 @pytest.mark.parametrize(
     "headers, expected_user",
     [
-        ({"X-Kbc-User-Email": "jane@example.com", "Origin": "https://app-123.hub.keboola.com"}, "jane@example.com"),
+        (
+            {
+                "X-Kbc-User-Email": "jane@example.com",
+                "X-Kbc-User-Id": "oidc-subject-1",
+                "Origin": "https://app-123.hub.keboola.com",
+            },
+            "jane@example.com",
+        ),
         ({}, "Unknown"),
     ],
 )
@@ -420,6 +427,7 @@ def test_execute_query_event_contains_user(keboola_streamlit, query_service_env,
     assert not result.empty
     params = mock_post.call_args.kwargs["json"]["params"]
     assert params["user"] == expected_user
+    assert params.get("user_id") == headers.get("X-Kbc-User-Id")
     assert params["event_type"] == "keboola_data_app_query_service_query"
     assert params["event_job_id"] == "qs-job-1"
     assert params["event_data"] == "Query: SELECT 1"

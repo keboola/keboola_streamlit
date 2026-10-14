@@ -88,6 +88,9 @@ Create an event in Keboola Storage to log activities:
 keboola.create_event(message='Streamlit App Create Event', event_type='keboola_data_app_create_event')
 ```
 
+Every event the library writes holds the logged-in user: the email (`user`) and, for apps with an identity provider
+login, the provider's user ID (`user_id`), which stays the same when the email changes.
+
 ### Table Selection
 
 Add a table selection interface in your app:
@@ -172,7 +175,8 @@ The library finds the workspace and the service from environment variables that 
 - `BRANCH_ID` (numeric)
 - `QUERY_SERVICE_URL`; when it is not set, the URL is read from the Storage API index
 
-Each query is logged as a Storage event with the logged-in user, the query text and the Query Service job ID:
+Each query is logged as a Storage event with the logged-in user (email and user ID), the query text and the Query
+Service job ID:
 
 - `keboola_data_app_query_service_query` is written right after the query is submitted. If it cannot be written,
   the query is cancelled and no data is returned.
