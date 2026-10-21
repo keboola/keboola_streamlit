@@ -164,6 +164,7 @@ class KeboolaStreamlit:
         event_data: Optional[str] = None,
         job_id: Optional[Union[int, str]] = None,
         request_id: Optional[str] = None,
+        backend_query_id: Optional[str] = None,
     ) -> Tuple[Optional[int], Optional[str]]:
         headers = self._get_headers()
         url = f"{self.__root_url}/v2/storage/events"
@@ -200,6 +201,8 @@ class KeboolaStreamlit:
             requestData["params"]["event_job_id"] = job_id
         if request_id is not None:
             requestData["params"]["request_id"] = request_id
+        if backend_query_id is not None:
+            requestData["params"]["backend_query_id"] = backend_query_id
 
         try:
             response = requests.post(url, headers=requestHeaders, json=requestData, timeout=EVENT_TIMEOUT_SECONDS)
@@ -713,8 +716,9 @@ class KeboolaStreamlit:
         Executes a SQL query through Query Service on the workspace provisioned for the data app.
 
         Every query is logged as a Storage event with the logged-in user before it is sent. If that event cannot be
-        written, the query is not sent. A second event links the event's request ID to the Query Service job ID,
-        and a failed query writes a third event with the error.
+        written, the query is not sent. Later events link the event's request ID to the Query Service job ID and to
+        the backend query ID (the Snowflake query ID), and a failed query writes an event with the error. The events
+        do not hold the SQL, which can contain personal data.
 
         Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
@@ -751,7 +755,6 @@ class KeboolaStreamlit:
         status_code, _ = self._create_event(
             message="Streamlit App Query Service Query",
             event_type="keboola_data_app_query_service_query",
-            event_data=f"Query: {query}",
             request_id=request_id,
         )
         if status_code is None:
@@ -781,6 +784,13 @@ class KeboolaStreamlit:
                 self._cancel_query_service_job(client, job_id, f"No result within {max_wait_time} seconds.")
                 raise
             statement = status.statements[0]
+            self._create_event(
+                message="Streamlit App Query Service Query Completed",
+                event_type="keboola_data_app_query_service_query_completed",
+                job_id=job_id,
+                request_id=request_id,
+                backend_query_id=statement.query_id,
+            )
             if not return_df:
                 return statement.rows_affected or 0
             columns, rows = self._fetch_query_service_results(client, job_id, statement.id, max_rows)
@@ -790,11 +800,23 @@ class KeboolaStreamlit:
             self._create_event(
                 message="Streamlit App Query Service Query Failed",
                 event_type="keboola_data_app_query_service_query_failed",
-                event_data=f"Query: {query}\nError: {e}",
+                event_data=f"Error: {e}",
                 job_id=job_id,
                 request_id=request_id,
+                backend_query_id=self._get_backend_query_id(client, job_id),
             )
         return None
+
+    @staticmethod
+    def _get_backend_query_id(client: QueryServiceClient, job_id: Optional[str]) -> Optional[str]:
+        if job_id is None:
+            return None
+        try:
+            statements = client.get_job_status(job_id).statements
+            return statements[0].query_id if statements else None
+        except Exception as e:
+            logging.error(f"Could not read the backend query ID of Query Service job {job_id}: {e}")
+            return None
 
     @staticmethod
     def _submit_query_service_job(

@@ -185,12 +185,16 @@ The library finds the workspace and the service from environment variables that 
 Each query is logged as Storage events with the logged-in user (email and user ID). The events of one query share a
 `request_id`:
 
-- `keboola_data_app_query_service_query` holds the query text and is written **before** the query is sent. If it
-  cannot be written, the query is not sent, so no query runs without an audit entry.
+- `keboola_data_app_query_service_query` is written **before** the query is sent. If it cannot be written, the query
+  is not sent, so no query runs without an audit entry.
 - `keboola_data_app_query_service_query_submitted` holds the Query Service job ID, to match the query with the Query
   Service history.
-- `keboola_data_app_query_service_query_failed` is written when the query fails or times out. It also holds the
-  error message.
+- `keboola_data_app_query_service_query_completed` holds the backend query ID (`backend_query_id`, the Snowflake query
+  ID), to find the query in the Snowflake query history.
+- `keboola_data_app_query_service_query_failed` is written when the query fails or times out. It holds the error
+  message and, when the query reached the backend, the backend query ID.
+
+The events do not hold the SQL text, because it can contain personal data. Use the backend query ID to see the SQL.
 
 Query Service returns every value as a string. The library converts number, boolean, date and timestamp columns
 to pandas types based on the column type. Integers become `Int64`, decimals become `float64` (about 15 significant
