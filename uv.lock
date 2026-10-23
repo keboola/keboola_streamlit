@@ -784,7 +784,7 @@ dev = [
 requires-dist = [
     { name = "deprecated" },
     { name = "kbcstorage" },
-    { name = "keboola-query-service", marker = "extra == 'query-service'", specifier = ">=0.3.0" },
+    { name = "keboola-query-service", marker = "extra == 'query-service'", specifier = ">=0.3.0,<0.4" },
     { name = "pandas" },
     { name = "snowflake-snowpark-python", marker = "extra == 'snowflake'", specifier = ">=1.35.0" },
     { name = "streamlit", specifier = ">=1.37.0" },

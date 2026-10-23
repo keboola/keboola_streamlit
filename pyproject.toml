@@ -33,7 +33,7 @@ classifiers = [
 
 [project.optional-dependencies]
 snowflake = ["snowflake-snowpark-python>=1.35.0"]
-query-service = ["keboola-query-service>=0.3.0"]
+query-service = ["keboola-query-service>=0.3.0,<0.4"]
 
 [project.urls]
 Repository = "https://github.com/keboola/keboola_streamlit/"
