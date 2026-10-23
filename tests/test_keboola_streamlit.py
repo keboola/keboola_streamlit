@@ -29,6 +29,24 @@ def test_get_event_job_id(keboola_streamlit):
     assert job_id == 123
 
 
+@pytest.mark.parametrize(
+    "headers, expected_user_id",
+    [
+        ({"X-Kbc-User-Email": "jane@example.com", "X-Kbc-User-Id": "oidc-subject-1"}, "oidc-subject-1"),
+        ({"X-Kbc-User-Email": "jane@example.com", "X-Kbc-User-Id": ""}, None),
+        ({}, None),
+    ],
+)
+def test_create_event_user_id(keboola_streamlit, headers, expected_user_id):
+    keboola_streamlit.set_dev_mockup_headers(headers)
+
+    with patch("requests.post") as mock_post:
+        keboola_streamlit.create_event(message="Test")
+
+    params = mock_post.call_args.kwargs["json"]["params"]
+    assert params.get("user_id") == expected_user_id
+
+
 def test_set_dev_mockup_headers(keboola_streamlit):
     headers = {"X-Kbc-User-Email": "test@example.com"}
     keboola_streamlit.set_dev_mockup_headers(headers)
