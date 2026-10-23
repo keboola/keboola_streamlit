@@ -193,7 +193,8 @@ Each query is logged as Storage events with the logged-in user (email and user I
   ID), to find the query in the Snowflake query history.
 - `keboola_data_app_query_service_query_failed` is written when the query fails, is cancelled or times out, or its
   results cannot be read. It holds the error message and, when the query reached the backend, the backend query ID.
-  A query that failed or timed out is cancelled, so it does not keep running.
+  A query that failed or timed out is cancelled, so it does not keep running. When the cancel has not taken effect
+  within 30 seconds, the event says so, because the query may still complete.
 
 The events do not hold the SQL text, because it can contain personal data. Use the backend query ID to see the SQL.
 The error message in the failed event comes from the database and can repeat values from the query, e.g.
@@ -205,8 +206,9 @@ header) in the arguments of the cached function, so each user gets their own cac
 
 Query Service returns every value as a string. The library converts number, boolean, date and timestamp columns
 to pandas types based on the column type. Integers become `Int64`, decimals become `float64` (about 15 significant
-digits), and timestamps with a time zone are converted to UTC. Dates and timestamps outside the pandas range (years
-1677 to 2262, e.g. `9999-12-31`) become Python `date` and `datetime` objects. Integers outside the `Int64` range,
+digits), and timestamps with a time zone are converted to UTC. Snowflake dates and timestamps outside the pandas
+range (years 1677 to 2262, e.g. `9999-12-31`) become Python `date` and `datetime` objects, and then the whole column
+has the `object` type. BigQuery dates and timestamps outside that range stay as strings. Integers outside the `Int64` range,
 columns of other types (including `TIME`, which Snowflake sends as seconds since midnight), and columns whose values
 do not match their type stay as strings. Pass `convert_types=False` to get only strings.
 

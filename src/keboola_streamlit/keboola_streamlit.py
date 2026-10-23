@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -27,6 +28,9 @@ EVENT_TIMEOUT_SECONDS = 30
 QUERY_SERVICE_PAGE_SIZE = 5000
 QUERY_SERVICE_SUBMIT_ATTEMPTS = 3
 QUERY_SERVICE_FINAL_STATES = frozenset({"completed", "failed", "canceled"})
+QUERY_SERVICE_POLL_RETRY_SECONDS = 2
+QUERY_SERVICE_CANCEL_WAIT_SECONDS = 30
+QUERY_SERVICE_OUTCOME_UNKNOWN = "The job was cancelled, but it had not ended yet, so the query may still complete."
 
 _QUERY_SERVICE_CLIENTS: Dict[Tuple[str, str, bool], QueryServiceClient] = {}
 _QUERY_SERVICE_URLS: Dict[str, str] = {}
@@ -662,7 +666,8 @@ class KeboolaStreamlit:
             raise
         base_url = self._get_query_service_url()
         key = (base_url, self.__token, retry_requests)
-        # Streamlit creates a new KeboolaStreamlit on every rerun, so clients are shared at module level.
+        # Streamlit creates a new KeboolaStreamlit on every rerun, so clients are shared at module level. The cache
+        # has no limit, which is fine for one app token but not for a token per user.
         with _QUERY_SERVICE_LOCK:
             client = _QUERY_SERVICE_CLIENTS.get(key)
             if client is None:
@@ -756,7 +761,12 @@ class KeboolaStreamlit:
         """
         if max_rows is not None and (isinstance(max_rows, bool) or not isinstance(max_rows, int) or max_rows <= 0):
             raise ValueError(f"max_rows must be a positive integer, got {max_rows!r}.")
-        if isinstance(max_wait_time, bool) or not isinstance(max_wait_time, (int, float)) or max_wait_time <= 0:
+        if (
+            isinstance(max_wait_time, bool)
+            or not isinstance(max_wait_time, (int, float))
+            or not math.isfinite(max_wait_time)
+            or max_wait_time <= 0
+        ):
             raise ValueError(f"max_wait_time must be a positive number of seconds, got {max_wait_time!r}.")
         try:
             workspace_id = self._read_workspace_id()
@@ -794,13 +804,21 @@ class KeboolaStreamlit:
             )
             return status_code
 
-        def log_failure(error: Exception, job_id: Optional[str] = None, backend_query_id: Optional[str] = None) -> None:
+        def log_failure(
+            error: Exception,
+            job_id: Optional[str] = None,
+            backend_query_id: Optional[str] = None,
+            outcome_unknown: bool = False,
+        ) -> None:
+            event_data = f"Error: {error}"
+            if outcome_unknown:
+                event_data += f"\n{QUERY_SERVICE_OUTCOME_UNKNOWN}"
             log_event(
                 "Streamlit App Query Service Query Failed",
                 "keboola_data_app_query_service_query_failed",
                 job_id=job_id,
                 backend_query_id=backend_query_id,
-                event_data=f"Error: {error}",
+                event_data=event_data,
             )
             # Shown after the event is written: st.error raises when a Streamlit rerun is pending.
             self._show_query_service_error(error)
@@ -831,11 +849,15 @@ class KeboolaStreamlit:
         try:
             status = self._wait_for_query_service_job(client, job_id, max_wait_time)
         except Exception as e:
+            if _is_job_failed(e):
+                log_failure(e, job_id, _first_backend_query_id(_get_job_status(client, job_id)))
+                return None
             reason = f"No result within {max_wait_time} seconds." if _is_job_timeout(e) else "Stopped after an error."
             status = self._stop_query_service_job(client, job_id, reason)
             # A job that finished just before it was cancelled has a valid result.
             if status is None or not _is_job_completed(status):
-                log_failure(e, job_id, _first_backend_query_id(status))
+                outcome_unknown = status is None or _state_name(status.status) not in QUERY_SERVICE_FINAL_STATES
+                log_failure(e, job_id, _first_backend_query_id(status), outcome_unknown)
                 return None
 
         statement = status.statements[0]
@@ -870,19 +892,32 @@ class KeboolaStreamlit:
                     refresh_metadata_on_success=refresh_metadata,
                 )
             except QueryServiceError as e:
-                # Query Service gives up on fetching the workspace credentials sooner than they can take to
-                # provision. No job is created in that case, so the submit is safe to repeat.
+                # Both errors mean no job was created, so the submit is safe to repeat. Query Service gives up on
+                # fetching the workspace credentials sooner than they can take to provision.
                 is_credentials_delay = e.status_code == 403 and "workspace credentials" in str(e).lower()
-                if not is_credentials_delay or attempt == QUERY_SERVICE_SUBMIT_ATTEMPTS:
+                is_rate_limited = e.status_code == 429
+                if not (is_credentials_delay or is_rate_limited) or attempt == QUERY_SERVICE_SUBMIT_ATTEMPTS:
                     raise
-                logging.warning(f"Query Service could not get workspace credentials (attempt {attempt}), retrying.")
+                logging.warning(f"Query Service did not accept the query (attempt {attempt}), retrying: {e}")
                 time.sleep(attempt)
         raise RuntimeError("Query Service submit attempts exhausted.")
 
     @staticmethod
     def _wait_for_query_service_job(client: QueryServiceClient, job_id: str, max_wait_time: float) -> JobStatus:
+        deadline = time.monotonic() + max_wait_time
+        wait_time = max_wait_time
+        while True:
+            try:
+                status = client.wait_for_job(job_id, max_wait_time=wait_time)
+                break
+            except Exception as e:
+                # The SDK retries a status request for less than a second, shorter than a Query Service restart.
+                if not _is_temporary_error(e) or time.monotonic() + QUERY_SERVICE_POLL_RETRY_SECONDS >= deadline:
+                    raise
+                logging.warning(f"Could not read the status of Query Service job {job_id}, retrying: {e}")
+                time.sleep(QUERY_SERVICE_POLL_RETRY_SECONDS)
+                wait_time = deadline - time.monotonic()
         # The SDK raises only for failed jobs and returns a canceled job like a completed one.
-        status = client.wait_for_job(job_id, max_wait_time=max_wait_time)
         if not _is_job_completed(status):
             reason = f": {status.cancellation_reason}" if status.cancellation_reason else ""
             raise RuntimeError(f"Query Service job {job_id} ended as {_state_name(status.status)}{reason}")
@@ -898,6 +933,11 @@ class KeboolaStreamlit:
             client.cancel_job(job_id, reason=reason)
         except Exception as e:
             logging.error(f"Could not cancel Query Service job {job_id}: {e}")
+        # Cancelling takes effect later, and the query can still complete in the meantime.
+        try:
+            client.wait_for_job(job_id, max_wait_time=QUERY_SERVICE_CANCEL_WAIT_SECONDS)
+        except Exception as e:
+            logging.error(f"Query Service job {job_id} did not end after the cancel: {e}")
         return _get_job_status(client, job_id)
 
     @staticmethod
@@ -941,9 +981,35 @@ def _state_name(state: Any) -> str:
 
 
 def _is_job_completed(status: JobStatus) -> bool:
-    return _state_name(status.status) == "completed" and all(
-        _state_name(statement.status) == "completed" for statement in status.statements
+    return (
+        _state_name(status.status) == "completed"
+        and bool(status.statements)
+        and all(_state_name(statement.status) == "completed" for statement in status.statements)
     )
+
+
+def _is_temporary_error(error: Exception) -> bool:
+    from keboola_query_service import QueryServiceError
+
+    try:
+        from httpx import TransportError
+
+        if isinstance(error, TransportError):
+            return True
+    except ImportError:
+        # httpx comes with the query-service extra; only tests run with a fake SDK and without it.
+        pass
+    # Subclasses are job results (failed, timed out) or client errors (401, 400, 404). The base class without a
+    # status code is a connection error or a timeout that outlasted the SDK retries.
+    if type(error) is not QueryServiceError:
+        return False
+    return error.status_code is None or error.status_code == 429 or error.status_code >= 500
+
+
+def _is_job_failed(error: Exception) -> bool:
+    from keboola_query_service import JobError
+
+    return isinstance(error, JobError)
 
 
 def _is_job_timeout(error: Exception) -> bool:

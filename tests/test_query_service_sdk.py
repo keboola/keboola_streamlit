@@ -142,3 +142,19 @@ def test_status_errors_are_retried(run_query):
 
     assert run.result == 0
     assert run.requests.count(("GET", JOB_PATH)) == 2
+
+
+def test_polling_survives_an_outage_longer_than_the_sdk_retries(run_query):
+    completed = _job_status("completed", "completed")
+    unavailable = (503, {"error": "Unavailable"})
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): [unavailable] * 6 + [(200, completed)],
+        },
+        return_df=False,
+    )
+
+    assert run.result == 0
+    assert ("POST", f"{JOB_PATH}/cancel") not in run.requests

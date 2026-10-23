@@ -23,6 +23,23 @@ class FakeJobTimeoutError(FakeQueryServiceError):
     pass
 
 
+class FakeJobError(FakeQueryServiceError):
+    pass
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
 def _column(name, type_="TEXT"):
     return SimpleNamespace(name=name, type=type_)
 
@@ -51,7 +68,10 @@ def _mock_query_service_module(columns=(("A", "TEXT"),), data=(("1",),)):
     )
     fake_client_cls = MagicMock(name="Client", return_value=fake_client)
     fake_module = MagicMock(
-        Client=fake_client_cls, QueryServiceError=FakeQueryServiceError, JobTimeoutError=FakeJobTimeoutError
+        Client=fake_client_cls,
+        QueryServiceError=FakeQueryServiceError,
+        JobTimeoutError=FakeJobTimeoutError,
+        JobError=FakeJobError,
     )
     return fake_module, fake_client_cls, fake_client
 
@@ -270,13 +290,16 @@ COMPLETED_EVENT = _event(
 )
 
 
-def _failed_event(error, job_id="qs-job-1", backend_query_id="sf-query-1"):
+def _failed_event(error, job_id="qs-job-1", backend_query_id="sf-query-1", outcome_unknown=False):
+    event_data = f"Error: {error}"
+    if outcome_unknown:
+        event_data += f"\n{module.QUERY_SERVICE_OUTCOME_UNKNOWN}"
     return _event(
         "Streamlit App Query Service Query Failed",
         "keboola_data_app_query_service_query_failed",
         job_id=job_id,
         backend_query_id=backend_query_id,
-        event_data=f"Error: {error}",
+        event_data=event_data,
     )
 
 
@@ -290,12 +313,16 @@ def query_service(keboola_streamlit, query_service_env):
         columns=(("ID", "NUMBER"), ("NAME", "VARCHAR")), data=(("1", "a"), ("2", "b"))
     )
     keboola_streamlit._create_event = MagicMock(return_value=(201, "{}"))
+    clock = FakeClock()
     with (
         patch.dict(sys.modules, {"keboola_query_service": fake_module}),
         patch("streamlit.error") as mock_error,
         patch("uuid.uuid4", return_value=SimpleNamespace(hex="request-1")),
+        patch.object(module, "time", clock),
     ):
-        yield SimpleNamespace(app=keboola_streamlit, client=fake_client, client_cls=fake_client_cls, error=mock_error)
+        yield SimpleNamespace(
+            app=keboola_streamlit, client=fake_client, client_cls=fake_client_cls, error=mock_error, clock=clock
+        )
 
 
 def test_execute_query_returns_typed_dataframe(query_service):
@@ -388,7 +415,7 @@ def test_execute_query_without_return_df_and_no_rows_affected(query_service):
 
 
 def test_execute_query_failed_write_returns_none(query_service):
-    query_service.client.wait_for_job.side_effect = FakeQueryServiceError("SQL compilation error")
+    query_service.client.wait_for_job.side_effect = FakeJobError("SQL compilation error")
     query_service.client.get_job_status.return_value = _job("failed")
 
     result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False)
@@ -490,7 +517,7 @@ def test_execute_query_no_columns(query_service):
 
 
 def test_execute_query_failure_writes_failed_event(query_service):
-    query_service.client.wait_for_job.side_effect = FakeQueryServiceError("SQL compilation error")
+    query_service.client.wait_for_job.side_effect = FakeJobError("SQL compilation error")
     query_service.client.get_job_status.return_value = _job("failed")
 
     result = query_service.app.query_service_execute_query("SELECT 1")
@@ -503,7 +530,7 @@ def test_execute_query_failure_writes_failed_event(query_service):
 
 def test_execute_query_writes_failed_event_before_showing_error(query_service):
     calls = []
-    query_service.client.wait_for_job.side_effect = FakeQueryServiceError("SQL compilation error")
+    query_service.client.wait_for_job.side_effect = FakeJobError("SQL compilation error")
     query_service.app._create_event.side_effect = lambda **kwargs: calls.append(kwargs["event_type"]) or (201, "")
     query_service.error.side_effect = lambda *args: calls.append("st.error")
 
@@ -513,7 +540,7 @@ def test_execute_query_writes_failed_event_before_showing_error(query_service):
 
 
 def test_execute_query_failure_without_backend_query_id(query_service):
-    query_service.client.wait_for_job.side_effect = FakeQueryServiceError("SQL compilation error")
+    query_service.client.wait_for_job.side_effect = FakeJobError("SQL compilation error")
     query_service.client.get_job_status.side_effect = FakeQueryServiceError("Not found")
 
     query_service.app.query_service_execute_query("SELECT 1")
@@ -566,18 +593,67 @@ def test_execute_query_timeout_cancels_job(query_service):
     result = query_service.app.query_service_execute_query("SELECT 1", max_wait_time=5)
 
     assert result is None
-    query_service.client.wait_for_job.assert_called_once_with("qs-job-1", max_wait_time=5)
+    assert query_service.client.wait_for_job.call_args_list[0].kwargs == {"max_wait_time": 5}
     query_service.client.cancel_job.assert_called_once_with("qs-job-1", reason="No result within 5 seconds.")
+    assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s", outcome_unknown=True)
+
+
+def test_execute_query_waits_for_the_cancel_to_take_effect(query_service):
+    query_service.client.wait_for_job.side_effect = [
+        FakeJobTimeoutError("Job did not complete within 5s"),
+        _job("canceled"),
+    ]
+    query_service.client.get_job_status.side_effect = [_job("processing"), _job("canceled")]
+
+    query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False, max_wait_time=5)
+
+    assert query_service.client.wait_for_job.call_args_list[1].kwargs == {"max_wait_time": 30}
     assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s")
 
 
-def test_execute_query_cancels_job_after_status_error(query_service):
+def test_execute_query_job_completed_while_cancelling(query_service):
+    query_service.client.wait_for_job.side_effect = [FakeJobTimeoutError("Job did not complete within 5s"), _job()]
+    query_service.client.get_job_status.side_effect = [_job("processing"), _job(statement=_statement(rows_affected=1))]
+
+    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False, max_wait_time=5)
+
+    assert result == 1
+    assert _events(query_service) == [ACCESS_EVENT, SUBMITTED_EVENT, COMPLETED_EVENT]
+
+
+def test_execute_query_keeps_polling_through_a_short_outage(query_service):
+    query_service.client.wait_for_job.side_effect = [
+        FakeQueryServiceError("Service unavailable", status_code=503),
+        FakeQueryServiceError("Request failed after 4 attempts: timed out"),
+        _job(statement=_statement(rows_affected=5)),
+    ]
+
+    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False, max_wait_time=60)
+
+    assert result == 5
+    query_service.client.cancel_job.assert_not_called()
+    assert [call.kwargs["max_wait_time"] for call in query_service.client.wait_for_job.call_args_list] == [60, 58, 56]
+
+
+def test_execute_query_cancels_job_when_the_outage_outlasts_max_wait_time(query_service):
     query_service.client.wait_for_job.side_effect = FakeQueryServiceError("Service unavailable", status_code=503)
 
-    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False)
+    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False, max_wait_time=10)
 
     assert result is None
+    assert query_service.clock.now < 10 + 30
     query_service.client.cancel_job.assert_called_once_with("qs-job-1", reason="Stopped after an error.")
+    assert _events(query_service)[-1]["event_data"].endswith(module.QUERY_SERVICE_OUTCOME_UNKNOWN)
+
+
+@pytest.mark.parametrize("status_code", [403, 409])
+def test_execute_query_client_errors_are_not_retried(query_service, status_code):
+    query_service.client.wait_for_job.side_effect = FakeQueryServiceError("Not allowed", status_code=status_code)
+
+    query_service.app.query_service_execute_query("SELECT 1")
+
+    assert query_service.clock.sleeps == []
+    query_service.client.cancel_job.assert_called_once()
 
 
 def test_execute_query_job_finished_before_cancel(query_service):
@@ -605,12 +681,11 @@ def test_execute_query_retries_workspace_credentials_error(query_service):
         "qs-job-1",
     ]
 
-    with patch("time.sleep") as mock_sleep:
-        result = query_service.app.query_service_execute_query("SELECT 1")
+    result = query_service.app.query_service_execute_query("SELECT 1")
 
     assert not result.empty
     assert query_service.client.submit_job.call_count == 2
-    mock_sleep.assert_called_once_with(1)
+    assert query_service.clock.sleeps == [1]
     assert _events(query_service) == [ACCESS_EVENT, SUBMITTED_EVENT, COMPLETED_EVENT]
 
 
@@ -619,11 +694,46 @@ def test_execute_query_gives_up_after_three_credentials_errors(query_service):
         "Failed to get workspace credentials", status_code=403
     )
 
-    with patch("time.sleep"):
-        result = query_service.app.query_service_execute_query("SELECT 1")
+    result = query_service.app.query_service_execute_query("SELECT 1")
 
     assert result is None
     assert query_service.client.submit_job.call_count == 3
+
+
+def test_execute_query_retries_rate_limited_submit(query_service):
+    query_service.client.submit_job.side_effect = [
+        FakeQueryServiceError("Too many requests", status_code=429),
+        "qs-job-1",
+    ]
+
+    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False)
+
+    assert result == 0
+    assert query_service.client.submit_job.call_count == 2
+
+
+@pytest.mark.parametrize("status_code", [500, 502, None])
+def test_execute_query_does_not_repeat_submit_that_may_have_run(query_service, status_code):
+    query_service.client.submit_job.side_effect = FakeQueryServiceError("Bad gateway", status_code=status_code)
+
+    result = query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False)
+
+    assert result is None
+    query_service.client.submit_job.assert_called_once()
+
+
+def test_execute_query_job_without_statements_is_a_failure(query_service):
+    query_service.client.wait_for_job.return_value = SimpleNamespace(
+        status="completed", statements=[], cancellation_reason=None
+    )
+    query_service.client.get_job_status.return_value = SimpleNamespace(
+        status="completed", statements=[], cancellation_reason=None
+    )
+
+    result = query_service.app.query_service_execute_query("SELECT 1")
+
+    assert result is None
+    assert _events(query_service)[-1]["event_type"] == "keboola_data_app_query_service_query_failed"
 
 
 def test_execute_query_without_workspace_writes_no_event(query_service, monkeypatch):
@@ -741,7 +851,7 @@ def test_execute_query_rejects_invalid_max_rows(query_service, max_rows):
     query_service.client.submit_job.assert_not_called()
 
 
-@pytest.mark.parametrize("max_wait_time", [None, 0, -5, True, "60"])
+@pytest.mark.parametrize("max_wait_time", [None, 0, -5, True, "60", float("nan"), float("inf")])
 def test_execute_query_rejects_invalid_max_wait_time(query_service, max_wait_time):
     with pytest.raises(ValueError, match="max_wait_time"):
         query_service.app.query_service_execute_query("SELECT 1", max_wait_time=max_wait_time)
