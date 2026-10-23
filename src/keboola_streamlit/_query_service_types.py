@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, List, Optional, Protocol, Sequence
 
 import pandas as pd
@@ -23,6 +24,7 @@ EPOCH_SECONDS_PATTERN = re.compile(r"^-?\d+(\.\d+)?( \d+)?$")
 BIGQUERY_TIMESTAMP_PATTERN = re.compile(r"^(\S+) (\S+) \+0000 UTC$")
 ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}")
 NANOSECONDS_PER_DAY = 86_400 * 1_000_000_000
+EPOCH_DATE = date(1970, 1, 1)
 # pandas 2 guesses one format from the first value and rejects rows that differ (e.g. missing fractions).
 DATETIME_OPTIONS = {"format": "ISO8601"} if int(pd.__version__.split(".")[0]) >= 2 else {}
 
@@ -57,7 +59,7 @@ def _convert_column(values: pd.Series, type_name: Optional[str]) -> pd.Series:
         if base_type in INTEGER_TYPES or base_type in DECIMAL_TYPES:
             return _to_number(values)
         if base_type in FLOAT_TYPES:
-            return pd.to_numeric(values).astype("float64")
+            return _to_float(values)
         if base_type in BOOLEAN_TYPES:
             return _to_boolean(values)
         if base_type in DATE_TYPES:
@@ -87,7 +89,13 @@ def _to_number(values: pd.Series) -> pd.Series:
         # integers above 2**53. Values outside the int64 range raise here and stay strings.
         integers = [pd.NA if pd.isna(value) else int(value) for value in values]
         return pd.Series(pd.array(integers, dtype="Int64"), index=values.index, name=values.name)
-    return pd.to_numeric(values).astype("float64")
+    return _to_float(values)
+
+
+def _to_float(values: pd.Series) -> pd.Series:
+    """Uses float() rather than pd.to_numeric, which rejects "NaN" and turns empty strings into NaN."""
+    floats = [float("nan") if pd.isna(value) else float(str(value)) for value in values]
+    return pd.Series(floats, dtype="float64", index=values.index, name=values.name)
 
 
 def _to_boolean(values: pd.Series) -> pd.Series:
@@ -106,16 +114,26 @@ def _to_date(values: pd.Series) -> pd.Series:
     if _all_match(values, EPOCH_DAYS_PATTERN):
         # Converted to nanoseconds, so dates get the same datetime64[ns] type as timestamps.
         nanoseconds = [pd.NA if pd.isna(value) else int(value) * NANOSECONDS_PER_DAY for value in values]
-        return pd.to_datetime(pd.Series(nanoseconds, dtype="Int64", index=values.index, name=values.name), unit="ns")
+        try:
+            return pd.to_datetime(
+                pd.Series(nanoseconds, dtype="Int64", index=values.index, name=values.name), unit="ns"
+            )
+        except (OverflowError, ValueError, TypeError):
+            # datetime64[ns] covers only the years 1677 to 2262, so e.g. 9999-12-31 becomes a date object.
+            return values.map(lambda value: value if pd.isna(value) else EPOCH_DATE + timedelta(days=int(value)))
     return _parse_iso_datetime(values, utc=False)
 
 
 def _to_timestamp(values: pd.Series, utc: bool) -> pd.Series:
     if _all_match(values, EPOCH_SECONDS_PATTERN):
         nanoseconds = [pd.NA if pd.isna(value) else _epoch_seconds_to_nanoseconds(str(value)) for value in values]
-        return pd.to_datetime(
-            pd.Series(nanoseconds, dtype="Int64", index=values.index, name=values.name), unit="ns", utc=utc
-        )
+        try:
+            return pd.to_datetime(
+                pd.Series(nanoseconds, dtype="Int64", index=values.index, name=values.name), unit="ns", utc=utc
+            )
+        except (OverflowError, ValueError, TypeError):
+            # Outside the datetime64[ns] range, so datetime objects with microsecond precision.
+            return values.map(lambda value: value if pd.isna(value) else _epoch_seconds_to_datetime(str(value), utc))
     return _parse_iso_datetime(values.str.replace(BIGQUERY_TIMESTAMP_PATTERN, r"\1T\2Z", regex=True), utc)
 
 
@@ -125,6 +143,14 @@ def _epoch_seconds_to_nanoseconds(value: str) -> int:
     whole, _, fraction = seconds.lstrip("-").partition(".")
     nanoseconds = int(whole) * 1_000_000_000 + int((fraction + "000000000")[:9])
     return -nanoseconds if seconds.startswith("-") else nanoseconds
+
+
+def _epoch_seconds_to_datetime(value: str, utc: bool) -> datetime:
+    seconds = value.split(" ")[0]
+    whole, _, fraction = seconds.lstrip("-").partition(".")
+    delta = timedelta(seconds=int(whole), microseconds=int((fraction + "000000")[:6]))
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc if utc else None)
+    return epoch - delta if seconds.startswith("-") else epoch + delta
 
 
 def _parse_iso_datetime(values: pd.Series, utc: bool) -> pd.Series:

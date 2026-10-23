@@ -1,3 +1,4 @@
+import datetime
 import os
 import sys
 from types import SimpleNamespace
@@ -154,12 +155,46 @@ def test_other_types_stay_strings(type_name, values):
         ("DATE", ["19753", "2024-01-31"]),
         ("TIMESTAMP_NTZ", ["1706696430.5", "yesterday"]),
         ("DATE", ["99999999"]),
+        ("NUMBER", ["1", "", "3"]),
+        ("NUMBER(38,2)", ["1.5", ""]),
+        ("FLOAT", ["1.5", ""]),
     ],
 )
 def test_unexpected_values_stay_strings(type_name, values):
     result = _convert(type_name, values)
 
     assert result.tolist() == values
+
+
+@pytest.mark.parametrize("values", [["1.5", "NaN"], ["1.5", "nan"], ["-inf", None]])
+def test_float_special_values(values):
+    result = _convert("FLOAT", values)
+
+    assert str(result.dtype) == "float64"
+    assert result.tolist()[0] == float(values[0])
+    assert pd.isna(result.iloc[1])
+
+
+def test_snowflake_date_outside_pandas_range_becomes_date_objects():
+    result = _convert("DATE", ["2932896", "20000", None])
+
+    assert result.tolist() == [datetime.date(9999, 12, 31), datetime.date(2024, 10, 4), None]
+
+
+@pytest.mark.parametrize(
+    "type_name, value, expected",
+    [
+        ("TIMESTAMP_NTZ", "253402300799.5", datetime.datetime(9999, 12, 31, 23, 59, 59, 500000)),
+        ("TIMESTAMP_NTZ", "-9999999999", datetime.datetime(1653, 2, 10, 6, 13, 21)),
+        (
+            "TIMESTAMP_TZ",
+            "253402300799 1440",
+            datetime.datetime(9999, 12, 31, 23, 59, 59, tzinfo=datetime.timezone.utc),
+        ),
+    ],
+)
+def test_snowflake_timestamp_outside_pandas_range_becomes_datetime_objects(type_name, value, expected):
+    assert _convert(type_name, [value]).tolist() == [expected]
 
 
 @pytest.mark.parametrize("values", [["9007199254740993", None], ["9007199254740993", "1"]])
