@@ -183,7 +183,7 @@ The library finds the workspace and the service from environment variables that 
 - `QUERY_SERVICE_URL`; when it is not set, the URL is read from the Storage API index
 
 Each query is logged as Storage events with the logged-in user (email and user ID). The events of one query share a
-`request_id`:
+`request_id` and hold the workspace ID and branch ID:
 
 - `keboola_data_app_query_service_query` is written **before** the query is sent. If it cannot be written, the query
   is not sent, so no query runs without an audit entry.
@@ -191,16 +191,24 @@ Each query is logged as Storage events with the logged-in user (email and user I
   Service history.
 - `keboola_data_app_query_service_query_completed` holds the backend query ID (`backend_query_id`, the Snowflake query
   ID), to find the query in the Snowflake query history.
-- `keboola_data_app_query_service_query_failed` is written when the query fails or times out. It holds the error
-  message and, when the query reached the backend, the backend query ID.
+- `keboola_data_app_query_service_query_failed` is written when the query fails, is cancelled or times out, or its
+  results cannot be read. It holds the error message and, when the query reached the backend, the backend query ID.
+  A query that failed or timed out is cancelled, so it does not keep running.
 
 The events do not hold the SQL text, because it can contain personal data. Use the backend query ID to see the SQL.
+The error message in the failed event comes from the database and can repeat values from the query, e.g.
+`Numeric value 'jane@example.com' is not recognized`.
+
+Results cached with `st.cache_data` are shared by all users of the app, and a cached call writes no events. To log
+every read, call `query_service_execute_query` without caching, or include the user (e.g. the `X-Kbc-User-Email`
+header) in the arguments of the cached function, so each user gets their own cache entry and event.
 
 Query Service returns every value as a string. The library converts number, boolean, date and timestamp columns
 to pandas types based on the column type. Integers become `Int64`, decimals become `float64` (about 15 significant
-digits), and timestamps with a time zone are converted to UTC. Integers outside the `Int64` range, columns of other
-types, and columns whose values do not match their type stay as strings. Pass `convert_types=False` to get only
-strings.
+digits), and timestamps with a time zone are converted to UTC. Dates and timestamps outside the pandas range (years
+1677 to 2262, e.g. `9999-12-31`) become Python `date` and `datetime` objects. Integers outside the `Int64` range,
+columns of other types (including `TIME`, which Snowflake sends as seconds since midnight), and columns whose values
+do not match their type stay as strings. Pass `convert_types=False` to get only strings.
 
 Other options:
 
@@ -208,7 +216,8 @@ Other options:
   data. It is on by default when `return_df=False`; pass `refresh_metadata=True` when a query with `return_df=True`
   changes data.
 - `max_rows` reads at most that many rows.
-- `max_wait_time` (seconds, default 300) after which the query is cancelled.
+- `max_wait_time` (seconds, default 300) after which the query is cancelled. A slow Query Service response can make
+  the call take longer.
 
 Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
