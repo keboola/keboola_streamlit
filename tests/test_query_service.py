@@ -20,7 +20,9 @@ class FakeQueryServiceError(Exception):
 
 
 class FakeJobTimeoutError(FakeQueryServiceError):
-    pass
+    def __init__(self, message, job_id=None):
+        super().__init__(message)
+        self.job_id = job_id
 
 
 class FakeJobError(FakeQueryServiceError):
@@ -611,6 +613,20 @@ def test_execute_query_waits_for_the_cancel_to_take_effect(query_service):
     assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s")
 
 
+def test_execute_query_does_not_log_a_failed_job_after_the_cancel_as_still_running(query_service):
+    query_service.client.wait_for_job.side_effect = [
+        FakeJobTimeoutError("Job did not complete within 5s"),
+        FakeJobError("SQL compilation error"),
+    ]
+    query_service.client.get_job_status.side_effect = [_job("processing"), _job("failed")]
+
+    with patch("logging.error") as mock_log_error:
+        query_service.app.query_service_execute_query("SELECT 1", max_wait_time=5)
+
+    assert not any("did not end" in call.args[0] for call in mock_log_error.call_args_list)
+    assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s")
+
+
 def test_execute_query_job_completed_while_cancelling(query_service):
     query_service.client.wait_for_job.side_effect = [FakeJobTimeoutError("Job did not complete within 5s"), _job()]
     query_service.client.get_job_status.side_effect = [_job("processing"), _job(statement=_statement(rows_affected=1))]
@@ -642,7 +658,7 @@ def test_execute_query_cancels_job_when_the_outage_outlasts_max_wait_time(query_
 
     assert result is None
     assert query_service.clock.now < 10 + 30
-    query_service.client.cancel_job.assert_called_once_with("qs-job-1", reason="Stopped after an error.")
+    query_service.client.cancel_job.assert_called_once_with("qs-job-1", reason="No result within 10 seconds.")
     assert _events(query_service)[-1]["event_data"].endswith(module.QUERY_SERVICE_OUTCOME_UNKNOWN)
 
 

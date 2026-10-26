@@ -912,8 +912,12 @@ class KeboolaStreamlit:
                 break
             except Exception as e:
                 # The SDK retries a status request for less than a second, shorter than a Query Service restart.
-                if not _is_temporary_error(e) or time.monotonic() + QUERY_SERVICE_POLL_RETRY_SECONDS >= deadline:
+                if not _is_temporary_error(e):
                     raise
+                if time.monotonic() + QUERY_SERVICE_POLL_RETRY_SECONDS >= deadline:
+                    from keboola_query_service import JobTimeoutError
+
+                    raise JobTimeoutError(f"No result within {max_wait_time} seconds: {e}", job_id=job_id) from e
                 logging.warning(f"Could not read the status of Query Service job {job_id}, retrying: {e}")
                 time.sleep(QUERY_SERVICE_POLL_RETRY_SECONDS)
                 wait_time = deadline - time.monotonic()
@@ -937,7 +941,8 @@ class KeboolaStreamlit:
         try:
             client.wait_for_job(job_id, max_wait_time=QUERY_SERVICE_CANCEL_WAIT_SECONDS)
         except Exception as e:
-            logging.error(f"Query Service job {job_id} did not end after the cancel: {e}")
+            if not _is_job_failed(e):
+                logging.error(f"Query Service job {job_id} did not end after the cancel: {e}")
         return _get_job_status(client, job_id)
 
     @staticmethod
