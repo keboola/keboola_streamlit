@@ -941,7 +941,9 @@ class KeboolaStreamlit:
         try:
             client.wait_for_job(job_id, max_wait_time=QUERY_SERVICE_CANCEL_WAIT_SECONDS)
         except Exception as e:
-            if not _is_job_failed(e):
+            if _is_temporary_error(e):
+                logging.error(f"Could not check whether Query Service job {job_id} ended after the cancel: {e}")
+            elif not _is_job_failed(e):
                 logging.error(f"Query Service job {job_id} did not end after the cancel: {e}")
         return _get_job_status(client, job_id)
 
