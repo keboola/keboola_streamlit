@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 EVENT_TIMEOUT_SECONDS = 30
 QUERY_SERVICE_PAGE_SIZE = 5000
+# Query Service rejects smaller pages, so a smaller max_rows reads a full page and drops the extra rows.
+QUERY_SERVICE_MIN_PAGE_SIZE = 100
 QUERY_SERVICE_SUBMIT_ATTEMPTS = 3
 QUERY_SERVICE_FINAL_STATES = frozenset({"completed", "failed", "canceled"})
 QUERY_SERVICE_POLL_RETRY_SECONDS = 2
@@ -954,15 +956,14 @@ class KeboolaStreamlit:
         columns: Optional[List[QueryServiceColumn]] = None
         rows: List[List[Any]] = []
         while True:
-            page_size = (
-                QUERY_SERVICE_PAGE_SIZE if max_rows is None else min(QUERY_SERVICE_PAGE_SIZE, max_rows - len(rows))
-            )
+            page_size = QUERY_SERVICE_PAGE_SIZE
+            if max_rows is not None:
+                page_size = max(QUERY_SERVICE_MIN_PAGE_SIZE, min(page_size, max_rows - len(rows)))
             page = client.get_job_results(job_id, statement_id, offset=len(rows), page_size=page_size)
             if columns is None:
                 columns = page.columns
             rows.extend(page.data)
             if max_rows is not None and len(rows) >= max_rows:
-                # A page can hold more rows than asked for if Query Service applies a minimum page size.
                 return columns, rows[:max_rows]
             if page.number_of_rows is None:
                 if len(page.data) < page_size:
