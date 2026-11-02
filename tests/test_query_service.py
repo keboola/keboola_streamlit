@@ -858,7 +858,7 @@ def test_execute_query_max_rows_within_one_page(query_service):
     result = query_service.app.query_service_execute_query("SELECT N FROM t", max_rows=3)
 
     assert result["N"].tolist() == [0, 1, 2]
-    query_service.client.get_job_results.assert_called_once_with("qs-job-1", "stmt-1", offset=0, page_size=3)
+    query_service.client.get_job_results.assert_called_once_with("qs-job-1", "stmt-1", offset=0, page_size=100)
 
 
 def test_execute_query_max_rows_across_pages(query_service):
@@ -874,6 +874,23 @@ def test_execute_query_max_rows_across_pages(query_service):
     assert [call.kwargs for call in query_service.client.get_job_results.call_args_list] == [
         {"offset": 0, "page_size": 5000},
         {"offset": 5000, "page_size": 2000},
+    ]
+
+
+def test_execute_query_max_rows_last_page_uses_the_minimum_page_size(query_service):
+    columns = [_column("N", "NUMBER")]
+    query_service.client.get_job_results.side_effect = [
+        _page(columns, [[str(i)] for i in range(5000)], 10000),
+        _page(columns, [[str(i)] for i in range(5000, 5100)], 10000),
+    ]
+
+    result = query_service.app.query_service_execute_query("SELECT N FROM t", max_rows=5050)
+
+    assert len(result) == 5050
+    assert result["N"].iloc[-1] == 5049
+    assert [call.kwargs for call in query_service.client.get_job_results.call_args_list] == [
+        {"offset": 0, "page_size": 5000},
+        {"offset": 5000, "page_size": 100},
     ]
 
 
