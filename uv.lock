@@ -745,14 +745,14 @@ wheels = [
 
 [[package]]
 name = "keboola-query-service"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/02/b114348164aa5cc38ea01cd552ab851c44a47fa254673e2809dcdab2ab6d/keboola_query_service-0.3.0.tar.gz", hash = "sha256:106fe2123e741fade5cc964ca50fac9b543e87b2ef27b5f7e100e91dd85a9d32", size = 12635, upload-time = "2026-08-19T06:47:58.346Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/43/2de593946168905078967080c3752a29725d3d2e39577427ad4067f0eb14/keboola_query_service-0.4.0.tar.gz", hash = "sha256:ec2a88a6a76ccedc721c67333cef164538ca667f42e14ea7dbd59ba443e23035", size = 17351, upload-time = "2026-11-02T09:49:48.484Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/c2/172513a506833cb165ec87a4b304adac9af1a5c636eba21e1379d4e23526/keboola_query_service-0.3.0-py3-none-any.whl", hash = "sha256:25bb2d759f73ac6c419f4cfd45fb393362fb7616bacb87d6184a3e0c87eb050b", size = 14541, upload-time = "2026-08-19T06:47:57.046Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/05/ce4f1411af68dc24a8c941717cafc20a861e3a7e2c284febf4d28c784847/keboola_query_service-0.4.0-py3-none-any.whl", hash = "sha256:ed21bf40fae4972134fc430d1fb5e90a69d6a4cc77de827b00445e1fed148014", size = 19964, upload-time = "2026-11-02T09:49:46.903Z" },
 ]
 
 [[package]]
@@ -784,7 +784,7 @@ dev = [
 requires-dist = [
     { name = "deprecated" },
     { name = "kbcstorage" },
-    { name = "keboola-query-service", marker = "extra == 'query-service'", specifier = ">=0.3.0,<0.4" },
+    { name = "keboola-query-service", marker = "extra == 'query-service'", specifier = ">=0.3.0,<0.5" },
     { name = "pandas" },
     { name = "snowflake-snowpark-python", marker = "extra == 'snowflake'", specifier = ">=1.35.0" },
     { name = "streamlit", specifier = ">=1.37.0" },
