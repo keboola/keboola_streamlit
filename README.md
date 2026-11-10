@@ -201,8 +201,8 @@ The error message in the failed event comes from the database and can repeat val
 `Numeric value 'jane@example.com' is not recognized`.
 
 Results cached with `st.cache_data` are shared by all users of the app, and a cached call writes no events. To log
-every read, call `query_service_execute_query` without caching, or include the user (e.g. the `X-Kbc-User-Email`
-header) in the arguments of the cached function, so each user gets their own cache entry and event.
+every read, call `query_service_execute_query` without caching, or key the cache per user (see
+[Row-level security](#row-level-security)), so each user gets their own cache entry and event.
 
 Query Service returns every value as a string. The library converts number, boolean, date and timestamp columns
 to pandas types based on the column type. Integers become `Int64`, decimals become `float64` (about 15 significant
@@ -224,6 +224,54 @@ Other options:
 Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
 For local development, set `BRANCH_ID` and `WORKSPACE_ID` (and optionally `QUERY_SERVICE_URL`) yourself.
+
+#### Row-level security
+
+When the user signs in through an OAuth/OIDC provider, Keboola's apps proxy adds the user token
+(`X-Kbc-App-User-Token`) to the request. `query_service_execute_query` sends it, together with the app's Storage
+token, with every Query Service request of the query. In a workspace governed by row-level security, Query Service
+then returns only the rows of that user. Without the token (password login, no login, local runs) only the Storage
+token is sent, and a governed workspace refuses the query.
+
+When row-level security refuses a query, the app shows "You have no access to this data." and the failed event holds
+the error. The refusal is not retried.
+
+The token lives 5 minutes, and Streamlit gets it once, when the page opens. A query sent later is refused until the
+user reloads the page.
+
+**Key every cache per user.** `st.cache_data` is one cache for all users of the app, keyed only by the arguments. In
+a governed workspace it would give one user's rows to the next user. Pass the user as an argument whose name does not
+start with `_` (Streamlit leaves such arguments out of the key). Use the token's `idp` and `sub` claims, not the
+token itself, which changes on every page load:
+
+```python
+import base64
+import json
+
+
+def user_key() -> tuple:
+    token = st.context.headers.get("X-Kbc-App-User-Token")
+    if not token:
+        return ("no user",)
+    payload = token.split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    return (claims["idp"], claims["sub"])
+
+
+@st.cache_data(ttl=300)
+def load_orders(user: tuple) -> pd.DataFrame:
+    df = keboola.query_service_execute_query('SELECT * FROM "in.c-crm"."orders"')
+    if df is None:
+        # Streamlit does not cache an exception, so a failed query (e.g. an expired token) is not kept for 5 minutes.
+        raise RuntimeError("The query failed.")
+    return df
+
+
+df = load_orders(user_key())
+```
+
+The app does not verify the token: the apps proxy is the only one that sets the header, and it drops copies sent by
+the browser.
 
 ## License
 

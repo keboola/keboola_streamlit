@@ -756,6 +756,11 @@ class KeboolaStreamlit:
         the backend query ID (the Snowflake query ID), and a failed query writes an event with the error. The events
         do not hold the SQL, which can contain personal data.
 
+        Every request of the query carries the user token of the signed-in user (X-Kbc-App-User-Token) with the app's
+        Storage token, so a workspace governed by row-level security returns only that user's rows. Without the token,
+        only the Storage token is sent. A row-level security refusal is not retried. st.cache_data shares results
+        between all users: key a cached function by the user (see "Row-level security" in the README).
+
         Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
         Args:
