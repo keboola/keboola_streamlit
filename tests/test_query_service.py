@@ -29,6 +29,27 @@ class FakeJobError(FakeQueryServiceError):
     pass
 
 
+class FakeRowLevelSecurityError(FakeQueryServiceError):
+    pass
+
+
+class FakeStorageToken:
+    def __init__(self, token):
+        self.token = token
+
+    def __eq__(self, other):
+        return type(other) is FakeStorageToken and other.token == self.token
+
+
+class FakeAppUserToken:
+    def __init__(self, token, *, storage_token):
+        self.token = token
+        self.storage_token = storage_token
+
+
+STORAGE_AUTH = FakeStorageToken("dummy_token")
+
+
 class FakeClock:
     def __init__(self):
         self.now = 0.0
@@ -74,6 +95,9 @@ def _mock_query_service_module(columns=(("A", "TEXT"),), data=(("1",),)):
         QueryServiceError=FakeQueryServiceError,
         JobTimeoutError=FakeJobTimeoutError,
         JobError=FakeJobError,
+        RowLevelSecurityError=FakeRowLevelSecurityError,
+        StorageToken=FakeStorageToken,
+        AppUserToken=FakeAppUserToken,
     )
     return fake_module, fake_client_cls, fake_client
 
@@ -342,9 +366,12 @@ def test_execute_query_returns_typed_dataframe(query_service):
         statements=[query],
         transactional=False,
         refresh_metadata_on_success=False,
+        auth=STORAGE_AUTH,
     )
-    query_service.client.wait_for_job.assert_called_once_with("qs-job-1", max_wait_time=300.0)
-    query_service.client.get_job_results.assert_called_once_with("qs-job-1", "stmt-1", offset=0, page_size=5000)
+    query_service.client.wait_for_job.assert_called_once_with("qs-job-1", max_wait_time=300.0, auth=STORAGE_AUTH)
+    query_service.client.get_job_results.assert_called_once_with(
+        "qs-job-1", "stmt-1", offset=0, page_size=5000, auth=STORAGE_AUTH
+    )
     assert _events(query_service) == [ACCESS_EVENT, SUBMITTED_EVENT, COMPLETED_EVENT]
 
 
@@ -453,7 +480,11 @@ def test_execute_query_reads_all_pages(query_service):
 
     assert len(result) == 5002
     assert result["N"].iloc[-1] == 5001
-    assert query_service.client.get_job_results.call_args_list[1].kwargs == {"offset": 5000, "page_size": 5000}
+    assert query_service.client.get_job_results.call_args_list[1].kwargs == {
+        "offset": 5000,
+        "page_size": 5000,
+        "auth": STORAGE_AUTH,
+    }
 
 
 def test_execute_query_keeps_paging_after_a_short_page(query_service):
@@ -466,7 +497,11 @@ def test_execute_query_keeps_paging_after_a_short_page(query_service):
     result = query_service.app.query_service_execute_query("SELECT N FROM capped")
 
     assert len(result) == 1500
-    assert query_service.client.get_job_results.call_args_list[1].kwargs == {"offset": 1000, "page_size": 5000}
+    assert query_service.client.get_job_results.call_args_list[1].kwargs == {
+        "offset": 1000,
+        "page_size": 5000,
+        "auth": STORAGE_AUTH,
+    }
 
 
 def test_execute_query_fails_when_rows_are_missing(query_service):
@@ -595,8 +630,10 @@ def test_execute_query_timeout_cancels_job(query_service):
     result = query_service.app.query_service_execute_query("SELECT 1", max_wait_time=5)
 
     assert result is None
-    assert query_service.client.wait_for_job.call_args_list[0].kwargs == {"max_wait_time": 5}
-    query_service.client.cancel_job.assert_called_once_with("qs-job-1", reason="No result within 5 seconds.")
+    assert query_service.client.wait_for_job.call_args_list[0].kwargs == {"max_wait_time": 5, "auth": STORAGE_AUTH}
+    query_service.client.cancel_job.assert_called_once_with(
+        "qs-job-1", reason="No result within 5 seconds.", auth=STORAGE_AUTH
+    )
     assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s", outcome_unknown=True)
 
 
@@ -609,7 +646,7 @@ def test_execute_query_waits_for_the_cancel_to_take_effect(query_service):
 
     query_service.app.query_service_execute_query("UPDATE t SET a = 1", return_df=False, max_wait_time=5)
 
-    assert query_service.client.wait_for_job.call_args_list[1].kwargs == {"max_wait_time": 30}
+    assert query_service.client.wait_for_job.call_args_list[1].kwargs == {"max_wait_time": 30, "auth": STORAGE_AUTH}
     assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s")
 
 
@@ -674,7 +711,9 @@ def test_execute_query_cancels_job_when_the_outage_outlasts_max_wait_time(query_
 
     assert result is None
     assert query_service.clock.now < 10 + 30
-    query_service.client.cancel_job.assert_called_once_with("qs-job-1", reason="No result within 10 seconds.")
+    query_service.client.cancel_job.assert_called_once_with(
+        "qs-job-1", reason="No result within 10 seconds.", auth=STORAGE_AUTH
+    )
     event_data = _events(query_service)[-1]["event_data"]
     assert event_data.startswith("Error: No result within 10 seconds")
     assert event_data.endswith(module.QUERY_SERVICE_OUTCOME_UNKNOWN)
@@ -858,7 +897,9 @@ def test_execute_query_max_rows_within_one_page(query_service):
     result = query_service.app.query_service_execute_query("SELECT N FROM t", max_rows=3)
 
     assert result["N"].tolist() == [0, 1, 2]
-    query_service.client.get_job_results.assert_called_once_with("qs-job-1", "stmt-1", offset=0, page_size=100)
+    query_service.client.get_job_results.assert_called_once_with(
+        "qs-job-1", "stmt-1", offset=0, page_size=100, auth=STORAGE_AUTH
+    )
 
 
 def test_execute_query_max_rows_across_pages(query_service):
@@ -872,8 +913,8 @@ def test_execute_query_max_rows_across_pages(query_service):
 
     assert len(result) == 7000
     assert [call.kwargs for call in query_service.client.get_job_results.call_args_list] == [
-        {"offset": 0, "page_size": 5000},
-        {"offset": 5000, "page_size": 2000},
+        {"offset": 0, "page_size": 5000, "auth": STORAGE_AUTH},
+        {"offset": 5000, "page_size": 2000, "auth": STORAGE_AUTH},
     ]
 
 
@@ -889,8 +930,8 @@ def test_execute_query_max_rows_last_page_uses_the_minimum_page_size(query_servi
     assert len(result) == 5050
     assert result["N"].iloc[-1] == 5049
     assert [call.kwargs for call in query_service.client.get_job_results.call_args_list] == [
-        {"offset": 0, "page_size": 5000},
-        {"offset": 5000, "page_size": 100},
+        {"offset": 0, "page_size": 5000, "auth": STORAGE_AUTH},
+        {"offset": 5000, "page_size": 100, "auth": STORAGE_AUTH},
     ]
 
 
@@ -908,3 +949,54 @@ def test_execute_query_rejects_invalid_max_wait_time(query_service, max_wait_tim
         query_service.app.query_service_execute_query("SELECT 1", max_wait_time=max_wait_time)
 
     query_service.client.submit_job.assert_not_called()
+
+
+def test_execute_query_sends_the_user_token_with_the_storage_token(query_service):
+    query_service.app.set_dev_mockup_headers({"X-Kbc-App-User-Token": "user-token-1"})
+
+    query_service.app.query_service_execute_query("SELECT 1")
+
+    auth = query_service.client.submit_job.call_args.kwargs["auth"]
+    assert isinstance(auth, FakeAppUserToken)
+    assert auth.storage_token == STORAGE_AUTH
+    assert auth.token() == "user-token-1"
+    assert query_service.client.wait_for_job.call_args.kwargs["auth"] is auth
+    assert query_service.client.get_job_results.call_args.kwargs["auth"] is auth
+
+
+def test_execute_query_reads_the_user_token_at_each_request(query_service):
+    query_service.app.set_dev_mockup_headers({"X-Kbc-App-User-Token": "user-token-1"})
+    query_service.app.query_service_execute_query("SELECT 1")
+    auth = query_service.client.submit_job.call_args.kwargs["auth"]
+
+    query_service.app.dev_mockup_headers["X-Kbc-App-User-Token"] = "user-token-2"
+
+    assert auth.token() == "user-token-2"
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-Kbc-App-User-Token": ""}])
+def test_execute_query_without_user_token_sends_the_storage_token(query_service, headers):
+    query_service.app.set_dev_mockup_headers(headers)
+
+    query_service.app.query_service_execute_query("SELECT 1")
+
+    assert query_service.client.submit_job.call_args.kwargs["auth"] == STORAGE_AUTH
+
+
+def test_execute_query_row_level_security_refusal_is_not_retried(query_service):
+    error = FakeRowLevelSecurityError("Row-level security does not allow this query", status_code=403)
+    query_service.client.submit_job.side_effect = error
+
+    result = query_service.app.query_service_execute_query("SELECT 1")
+
+    assert result is None
+    query_service.client.submit_job.assert_called_once()
+    assert query_service.clock.sleeps == []
+    assert _events(query_service) == [ACCESS_EVENT, _failed_event(error, job_id=None, backend_query_id=None)]
+    query_service.error.assert_called_once_with(module.QUERY_SERVICE_NO_ACCESS)
+
+
+def test_row_level_security_refusal_is_not_a_temporary_error(query_service):
+    error = FakeRowLevelSecurityError("Row-level security does not allow this query", status_code=403)
+
+    assert module._is_temporary_error(error) is False

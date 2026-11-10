@@ -20,6 +20,7 @@ from ._query_service_types import QueryServiceColumn, query_result_to_dataframe
 
 if TYPE_CHECKING:
     from keboola_query_service import Client as QueryServiceClient
+    from keboola_query_service import Credential
     from keboola_query_service import JobStatus
     from snowflake.snowpark import Session
 
@@ -33,6 +34,7 @@ QUERY_SERVICE_FINAL_STATES = frozenset({"completed", "failed", "canceled"})
 QUERY_SERVICE_POLL_RETRY_SECONDS = 2
 QUERY_SERVICE_CANCEL_WAIT_SECONDS = 30
 QUERY_SERVICE_OUTCOME_UNKNOWN = "The job was cancelled, but it had not ended yet, so the query may still complete."
+QUERY_SERVICE_NO_ACCESS = "You have no access to this data."
 
 _QUERY_SERVICE_CLIENTS: Dict[Tuple[str, str, bool], QueryServiceClient] = {}
 _QUERY_SERVICE_URLS: Dict[str, str] = {}
@@ -69,6 +71,9 @@ class KeboolaStreamlit:
             return self.dev_mockup_headers
         else:
             return st.context.headers
+
+    def _get_app_user_token(self) -> Optional[str]:
+        return self._get_headers().get("X-Kbc-App-User-Token") or None
 
     def _get_event_job_id(self, table_id: str, operation_name: str) -> Optional[int]:
         """
@@ -678,6 +683,14 @@ class KeboolaStreamlit:
                 _QUERY_SERVICE_CLIENTS[key] = client
         return client
 
+    def _get_query_service_auth(self) -> Credential:
+        from keboola_query_service import AppUserToken, StorageToken
+
+        storage_token = StorageToken(self.__token)
+        if self._get_app_user_token() is None:
+            return storage_token
+        return AppUserToken(self._get_app_user_token, storage_token=storage_token)
+
     def _get_query_service_url(self) -> str:
         url = os.environ.get("QUERY_SERVICE_URL")
         if url:
@@ -776,6 +789,7 @@ class KeboolaStreamlit:
             client = self._get_query_service_client()
             # The SDK repeats a request after a 5xx or a timeout, which could run a write twice.
             submit_client = self._get_query_service_client(retry_requests=False)
+            auth = self._get_query_service_auth()
         except ImportError:
             raise
         except Exception as e:
@@ -834,6 +848,7 @@ class KeboolaStreamlit:
         try:
             job_id = self._submit_query_service_job(
                 submit_client,
+                auth,
                 branch_id,
                 workspace_id,
                 query,
@@ -849,13 +864,13 @@ class KeboolaStreamlit:
         )
 
         try:
-            status = self._wait_for_query_service_job(client, job_id, max_wait_time)
+            status = self._wait_for_query_service_job(client, auth, job_id, max_wait_time)
         except Exception as e:
             if _is_job_failed(e):
-                log_failure(e, job_id, _first_backend_query_id(_get_job_status(client, job_id)))
+                log_failure(e, job_id, _first_backend_query_id(_get_job_status(client, auth, job_id)))
                 return None
             reason = f"No result within {max_wait_time} seconds." if _is_job_timeout(e) else "Stopped after an error."
-            status = self._stop_query_service_job(client, job_id, reason)
+            status = self._stop_query_service_job(client, auth, job_id, reason)
             # A job that finished just before it was cancelled has a valid result.
             if status is None or not _is_job_completed(status):
                 outcome_unknown = status is None or _state_name(status.status) not in QUERY_SERVICE_FINAL_STATES
@@ -872,7 +887,7 @@ class KeboolaStreamlit:
         if not return_df:
             return statement.rows_affected or 0
         try:
-            columns, rows = self._fetch_query_service_results(client, job_id, statement.id, max_rows)
+            columns, rows = self._fetch_query_service_results(client, auth, job_id, statement.id, max_rows)
             return query_result_to_dataframe(columns, rows, convert_types)
         except Exception as e:
             log_failure(e, job_id, statement.query_id)
@@ -880,7 +895,12 @@ class KeboolaStreamlit:
 
     @staticmethod
     def _submit_query_service_job(
-        client: QueryServiceClient, branch_id: str, workspace_id: str, query: str, refresh_metadata: bool
+        client: QueryServiceClient,
+        auth: Credential,
+        branch_id: str,
+        workspace_id: str,
+        query: str,
+        refresh_metadata: bool,
     ) -> str:
         from keboola_query_service import QueryServiceError
 
@@ -892,6 +912,7 @@ class KeboolaStreamlit:
                     statements=[query],
                     transactional=False,
                     refresh_metadata_on_success=refresh_metadata,
+                    auth=auth,
                 )
             except QueryServiceError as e:
                 # Both errors mean no job was created, so the submit is safe to repeat. Query Service gives up on
@@ -905,12 +926,14 @@ class KeboolaStreamlit:
         raise RuntimeError("Query Service submit attempts exhausted.")
 
     @staticmethod
-    def _wait_for_query_service_job(client: QueryServiceClient, job_id: str, max_wait_time: float) -> JobStatus:
+    def _wait_for_query_service_job(
+        client: QueryServiceClient, auth: Credential, job_id: str, max_wait_time: float
+    ) -> JobStatus:
         deadline = time.monotonic() + max_wait_time
         wait_time = max_wait_time
         while True:
             try:
-                status = client.wait_for_job(job_id, max_wait_time=wait_time)
+                status = client.wait_for_job(job_id, max_wait_time=wait_time, auth=auth)
                 break
             except Exception as e:
                 # The SDK retries a status request for less than a second, shorter than a Query Service restart.
@@ -930,28 +953,30 @@ class KeboolaStreamlit:
         return status
 
     @staticmethod
-    def _stop_query_service_job(client: QueryServiceClient, job_id: str, reason: str) -> Optional[JobStatus]:
+    def _stop_query_service_job(
+        client: QueryServiceClient, auth: Credential, job_id: str, reason: str
+    ) -> Optional[JobStatus]:
         """Cancels the job unless it has ended, and returns its last known status."""
-        status = _get_job_status(client, job_id)
+        status = _get_job_status(client, auth, job_id)
         if status is not None and _state_name(status.status) in QUERY_SERVICE_FINAL_STATES:
             return status
         try:
-            client.cancel_job(job_id, reason=reason)
+            client.cancel_job(job_id, reason=reason, auth=auth)
         except Exception as e:
             logging.error(f"Could not cancel Query Service job {job_id}: {e}")
         # Cancelling takes effect later, and the query can still complete in the meantime.
         try:
-            client.wait_for_job(job_id, max_wait_time=QUERY_SERVICE_CANCEL_WAIT_SECONDS)
+            client.wait_for_job(job_id, max_wait_time=QUERY_SERVICE_CANCEL_WAIT_SECONDS, auth=auth)
         except Exception as e:
             if _is_temporary_error(e):
                 logging.error(f"Could not check whether Query Service job {job_id} ended after the cancel: {e}")
             elif not _is_job_failed(e):
                 logging.error(f"Query Service job {job_id} did not end after the cancel: {e}")
-        return _get_job_status(client, job_id)
+        return _get_job_status(client, auth, job_id)
 
     @staticmethod
     def _fetch_query_service_results(
-        client: QueryServiceClient, job_id: str, statement_id: str, max_rows: Optional[int]
+        client: QueryServiceClient, auth: Credential, job_id: str, statement_id: str, max_rows: Optional[int]
     ) -> Tuple[List[QueryServiceColumn], List[List[Any]]]:
         columns: Optional[List[QueryServiceColumn]] = None
         rows: List[List[Any]] = []
@@ -959,7 +984,7 @@ class KeboolaStreamlit:
             page_size = QUERY_SERVICE_PAGE_SIZE
             if max_rows is not None:
                 page_size = max(QUERY_SERVICE_MIN_PAGE_SIZE, min(page_size, max_rows - len(rows)))
-            page = client.get_job_results(job_id, statement_id, offset=len(rows), page_size=page_size)
+            page = client.get_job_results(job_id, statement_id, offset=len(rows), page_size=page_size, auth=auth)
             if columns is None:
                 columns = page.columns
             rows.extend(page.data)
@@ -976,7 +1001,10 @@ class KeboolaStreamlit:
     @staticmethod
     def _show_query_service_error(error: Exception) -> None:
         logging.error(f"An error occurred while executing Query Service query: {error}")
-        st.error(f"An error occurred while executing Query Service query: {error}")
+        if _is_row_level_security_refusal(error):
+            st.error(QUERY_SERVICE_NO_ACCESS)
+        else:
+            st.error(f"An error occurred while executing Query Service query: {error}")
 
 
 def _is_ascii_number(value: str) -> bool:
@@ -1026,9 +1054,15 @@ def _is_job_timeout(error: Exception) -> bool:
     return isinstance(error, JobTimeoutError)
 
 
-def _get_job_status(client: QueryServiceClient, job_id: str) -> Optional[JobStatus]:
+def _is_row_level_security_refusal(error: Exception) -> bool:
+    from keboola_query_service import RowLevelSecurityError
+
+    return isinstance(error, RowLevelSecurityError)
+
+
+def _get_job_status(client: QueryServiceClient, auth: Credential, job_id: str) -> Optional[JobStatus]:
     try:
-        return client.get_job_status(job_id)
+        return client.get_job_status(job_id, auth=auth)
     except Exception as e:
         logging.error(f"Could not read the status of Query Service job {job_id}: {e}")
         return None
