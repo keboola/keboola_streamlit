@@ -178,7 +178,7 @@ rows_affected = keboola.query_service_execute_query(
 
 The library finds the workspace and the service from environment variables that Keboola sets:
 
-- workspace ID: the JSON file at `KBC_WORKSPACE_MANIFEST_PATH`, or the `WORKSPACE_ID` variable
+- workspace ID: the JSON file at `KBC_WORKSPACE_MANIFEST_PATH` (the `WORKSPACE_ID` variable is not used)
 - `BRANCH_ID` (numeric)
 - `QUERY_SERVICE_URL`; when it is not set, the URL is read from the Storage API index
 
@@ -223,7 +223,8 @@ Other options:
 
 Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
-For local development, set `BRANCH_ID` and `WORKSPACE_ID` (and optionally `QUERY_SERVICE_URL`) yourself.
+For local development, set `BRANCH_ID` (and optionally `QUERY_SERVICE_URL`) yourself, and point
+`KBC_WORKSPACE_MANIFEST_PATH` to a file such as `{"workspaceId": "12345", "governed": false}`.
 
 #### Row-level security
 
@@ -237,8 +238,8 @@ When row-level security refuses a query, the app shows "You have no access to th
 the error. The refusal is not retried.
 
 `get_workspace()` returns the app's workspace: `id`, and `governed`, which tells whether row-level or column-level
-security governs it: True, False, or None when it is unknown (the workspace comes from `WORKSPACE_ID`, or the platform
-version does not write the `governed` field yet). It reads the workspace manifest (`KBC_WORKSPACE_MANIFEST_PATH`) on
+security governs it: True, False, or None when it is unknown (the platform version does not write the `governed` field
+yet). It reads the workspace manifest (`KBC_WORKSPACE_MANIFEST_PATH`) on
 every call, because the platform can update it while the app runs. When the workspace is governed and the request has no user token, `query_service_execute_query` does not send the
 query and shows "This app's data needs a signed-in user." In every other case the query is sent, and Query Service
 decides.

@@ -773,7 +773,6 @@ def test_execute_query_job_without_statements_is_a_failure(query_service):
 
 def test_execute_query_without_workspace_writes_no_event(query_service, monkeypatch):
     monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
-    monkeypatch.delenv("WORKSPACE_ID", raising=False)
 
     result = query_service.app.query_service_execute_query("SELECT 1")
 

@@ -712,8 +712,7 @@ class KeboolaStreamlit:
         cached_url = _QUERY_SERVICE_URLS.get(self.__root_url)
         if cached_url:
             return cached_url
-        # Apps that get the workspace through the deprecated WORKSPACE_ID secret, and local runs, have no
-        # QUERY_SERVICE_URL, but the Storage API index lists the Query Service of the stack.
+        # Local runs have no QUERY_SERVICE_URL, but the Storage API index lists the Query Service of the stack.
         response = requests.get(
             f"{self.__root_url}/v2/storage",
             params={"exclude": "components"},
