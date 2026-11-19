@@ -637,6 +637,20 @@ def test_execute_query_timeout_cancels_job(query_service):
     assert _events(query_service)[-1] == _failed_event("Job did not complete within 5s", outcome_unknown=True)
 
 
+def test_execute_query_says_when_the_cancel_was_not_sent(query_service):
+    query_service.client.wait_for_job.side_effect = FakeJobTimeoutError("Job did not complete within 5s")
+    query_service.client.cancel_job.side_effect = FakeQueryServiceError("Service unavailable", status_code=503)
+
+    result = query_service.app.query_service_execute_query("SELECT 1", max_wait_time=5)
+
+    assert result is None
+    event_data = _events(query_service)[-1]["event_data"]
+    assert (
+        event_data
+        == "Error: Job did not complete within 5s\nThe job could not be cancelled, so the query may still complete."
+    )
+
+
 def test_execute_query_waits_for_the_cancel_to_take_effect(query_service):
     query_service.client.wait_for_job.side_effect = [
         FakeJobTimeoutError("Job did not complete within 5s"),

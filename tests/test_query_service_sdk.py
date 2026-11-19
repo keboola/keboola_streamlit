@@ -15,6 +15,11 @@ from keboola_streamlit import KeboolaStreamlit  # noqa: E402
 from keboola_streamlit import keboola_streamlit as module  # noqa: E402
 
 JOB_PATH = "/api/v1/queries/qs-job-1"
+SIGN_IN_ENDED = (
+    "Your sign-in to this app ended before the query finished. The query may still complete: reload the page and "
+    "check the result before you run it again."
+)
+NOT_CANCELLED = "The job could not be cancelled, so the query may still complete."
 SUBMIT_PATH = "/api/v1/branches/678/workspaces/12345/queries"
 
 
@@ -399,7 +404,8 @@ def test_a_sign_in_that_ends_during_a_query_fails_the_query(run_query, refresh_h
     assert run.requests == [("POST", SUBMIT_PATH)]
     assert run.events[-1]["event_type"] == "keboola_data_app_query_service_query_failed"
     assert run.events[-1]["event_data"].startswith("Error: Your sign-in to this app could not be renewed.")
-    assert run.errors == ["Your sign-in to this app could not be renewed. Try again in a moment."]
+    assert run.events[-1]["event_data"].endswith(NOT_CANCELLED)
+    assert run.errors == [SIGN_IN_ENDED]
 
 
 def test_sign_in_error_is_not_a_temporary_error():
@@ -428,4 +434,23 @@ def test_a_token_that_disappears_during_a_query_gives_a_clear_error(run_query):
     assert run.events[-1]["event_data"].startswith(
         "Error: Your sign-in to this app could not be renewed. Try again in a moment."
     )
-    assert run.errors == ["Your sign-in to this app could not be renewed. Try again in a moment."]
+    assert run.events[-1]["event_data"].endswith(NOT_CANCELLED)
+    assert run.errors == [SIGN_IN_ENDED]
+
+
+def test_a_write_whose_token_ends_after_the_submit_warns_that_it_may_still_complete(run_query):
+    def drop_headers_after_submit(request):
+        if request.method == "POST":
+            run_query.app.dev_mockup_headers.clear()
+
+    run = run_query(
+        {("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"})},
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        on_request=drop_headers_after_submit,
+        return_df=False,
+    )
+
+    assert run.result is None
+    assert run.requests == [("POST", SUBMIT_PATH)]
+    assert run.errors == [SIGN_IN_ENDED]
+    assert "Try again" not in run.errors[0]

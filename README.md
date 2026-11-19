@@ -194,7 +194,7 @@ Each query is logged as Storage events with the logged-in user (email and user I
 - `keboola_data_app_query_service_query_failed` is written when the query fails, is cancelled or times out, or its
   results cannot be read. It holds the error message and, when the query reached the backend, the backend query ID.
   A query that failed or timed out is cancelled, so it does not keep running. When the cancel has not taken effect
-  within 30 seconds, the event says so, because the query may still complete.
+  within 30 seconds, or could not be sent, the event says so, because the query may still complete.
 
 The events do not hold the SQL text, because it can contain personal data. Use the backend query ID to see the SQL.
 The error message in the failed event comes from the database and can repeat values from the query, e.g.
@@ -244,7 +244,10 @@ A token never outlives it, so in that last minute the library keeps the current 
 once and gets a new pair.
 
 When the proxy refuses the refresh (the user signed out or lost access), the current token is used until it expires.
-After that the app shows "Your sign-in to this app has expired. Reload the page." When the proxy is not reachable
+After that the app shows "Your sign-in to this app has expired. Reload the page." Status and cancel requests need the
+user's token too (the app's Storage token does not stand for the user), so when the sign-in ends while a query runs,
+the query cannot be cancelled. The app then says that the query may still complete and asks the user to check the
+result before running it again. When the proxy is not reachable
 for a moment, the library tries again a few seconds later.
 
 **Key every cache per user.** `st.cache_data` is one cache for all users of the app, keyed only by the arguments. In

@@ -35,6 +35,11 @@ QUERY_SERVICE_FINAL_STATES = frozenset({"completed", "failed", "canceled"})
 QUERY_SERVICE_POLL_RETRY_SECONDS = 2
 QUERY_SERVICE_CANCEL_WAIT_SECONDS = 30
 QUERY_SERVICE_OUTCOME_UNKNOWN = "The job was cancelled, but it had not ended yet, so the query may still complete."
+QUERY_SERVICE_NOT_CANCELLED = "The job could not be cancelled, so the query may still complete."
+QUERY_SERVICE_SIGN_IN_ENDED = (
+    "Your sign-in to this app ended before the query finished. The query may still complete: reload the page and "
+    "check the result before you run it again."
+)
 QUERY_SERVICE_NO_ACCESS = "You have no access to this data."
 
 _QUERY_SERVICE_CLIENTS: Dict[Tuple[str, str, bool], QueryServiceClient] = {}
@@ -840,10 +845,11 @@ class KeboolaStreamlit:
             job_id: Optional[str] = None,
             backend_query_id: Optional[str] = None,
             outcome_unknown: bool = False,
+            cancelled: bool = True,
         ) -> None:
             event_data = f"Error: {error}"
             if outcome_unknown:
-                event_data += f"\n{QUERY_SERVICE_OUTCOME_UNKNOWN}"
+                event_data += f"\n{QUERY_SERVICE_OUTCOME_UNKNOWN if cancelled else QUERY_SERVICE_NOT_CANCELLED}"
             log_event(
                 "Streamlit App Query Service Query Failed",
                 "keboola_data_app_query_service_query_failed",
@@ -852,7 +858,7 @@ class KeboolaStreamlit:
                 event_data=event_data,
             )
             # Shown after the event is written: st.error raises when a Streamlit rerun is pending.
-            self._show_query_service_error(error)
+            self._show_query_service_error(error, outcome_unknown)
 
         if log_event("Streamlit App Query Service Query", "keboola_data_app_query_service_query") is None:
             message = "The query was not sent because its access event could not be written to Storage."
@@ -885,11 +891,11 @@ class KeboolaStreamlit:
                 log_failure(e, job_id, _first_backend_query_id(_get_job_status(client, auth, job_id)))
                 return None
             reason = f"No result within {max_wait_time} seconds." if _is_job_timeout(e) else "Stopped after an error."
-            status = self._stop_query_service_job(client, auth, job_id, reason)
+            status, cancelled = self._stop_query_service_job(client, auth, job_id, reason)
             # A job that finished just before it was cancelled has a valid result.
             if status is None or not _is_job_completed(status):
                 outcome_unknown = status is None or _state_name(status.status) not in QUERY_SERVICE_FINAL_STATES
-                log_failure(e, job_id, _first_backend_query_id(status), outcome_unknown)
+                log_failure(e, job_id, _first_backend_query_id(status), outcome_unknown, cancelled)
                 return None
 
         statement = status.statements[0]
@@ -970,14 +976,16 @@ class KeboolaStreamlit:
     @staticmethod
     def _stop_query_service_job(
         client: QueryServiceClient, auth: Credential, job_id: str, reason: str
-    ) -> Optional[JobStatus]:
-        """Cancels the job unless it has ended, and returns its last known status."""
+    ) -> Tuple[Optional[JobStatus], bool]:
+        """Cancels the job unless it has ended, and returns its last known status and whether the cancel was sent."""
         status = _get_job_status(client, auth, job_id)
         if status is not None and _state_name(status.status) in QUERY_SERVICE_FINAL_STATES:
-            return status
+            return status, True
         try:
             client.cancel_job(job_id, reason=reason, auth=auth)
+            cancelled = True
         except Exception as e:
+            cancelled = False
             logging.error(f"Could not cancel Query Service job {job_id}: {e}")
         # Cancelling takes effect later, and the query can still complete in the meantime.
         try:
@@ -987,7 +995,7 @@ class KeboolaStreamlit:
                 logging.error(f"Could not check whether Query Service job {job_id} ended after the cancel: {e}")
             elif not _is_job_failed(e):
                 logging.error(f"Query Service job {job_id} did not end after the cancel: {e}")
-        return _get_job_status(client, auth, job_id)
+        return _get_job_status(client, auth, job_id), cancelled
 
     @staticmethod
     def _fetch_query_service_results(
@@ -1014,9 +1022,12 @@ class KeboolaStreamlit:
                 raise RuntimeError(f"Query Service returned {len(rows)} of {page.number_of_rows} rows.")
 
     @staticmethod
-    def _show_query_service_error(error: Exception) -> None:
+    def _show_query_service_error(error: Exception, outcome_unknown: bool = False) -> None:
         logging.error(f"An error occurred while executing Query Service query: {error}")
-        if isinstance(error, AppUserTokenError):
+        if isinstance(error, AppUserTokenError) and outcome_unknown:
+            # Status and cancel need the user's token too, so the job may still run; a retry could repeat a write.
+            st.error(QUERY_SERVICE_SIGN_IN_ENDED)
+        elif isinstance(error, AppUserTokenError):
             st.error(str(error))
         elif _is_row_level_security_refusal(error):
             st.error(QUERY_SERVICE_NO_ACCESS)
