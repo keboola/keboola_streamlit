@@ -16,7 +16,7 @@ import requests
 import streamlit as st
 from kbcstorage.client import Client
 
-from ._app_user_token import AppUserTokenError, get_app_user_token
+from ._app_user_token import SIGN_IN_NOT_RENEWED, AppUserTokenError, get_app_user_token
 from ._query_service_types import QueryServiceColumn, query_result_to_dataframe
 
 if TYPE_CHECKING:
@@ -690,7 +690,15 @@ class KeboolaStreamlit:
         storage_token = StorageToken(self.__token)
         if self._get_app_user_token() is None:
             return storage_token
-        return AppUserToken(self._get_app_user_token, storage_token=storage_token)
+
+        def app_user_token() -> str:
+            token = self._get_app_user_token()
+            if token is None:
+                # The headers are empty once the websocket of the session has closed.
+                raise AppUserTokenError(SIGN_IN_NOT_RENEWED)
+            return token
+
+        return AppUserToken(app_user_token, storage_token=storage_token)
 
     def _get_query_service_url(self) -> str:
         url = os.environ.get("QUERY_SERVICE_URL")

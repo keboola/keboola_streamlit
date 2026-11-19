@@ -406,3 +406,26 @@ def test_sign_in_error_is_not_a_temporary_error():
     from keboola_streamlit import AppUserTokenError
 
     assert module._is_temporary_error(AppUserTokenError("expired")) is False
+
+
+def test_a_token_that_disappears_during_a_query_gives_a_clear_error(run_query):
+    def drop_headers_after_submit(request):
+        if request.method == "POST":
+            run_query.app.dev_mockup_headers.clear()
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+        },
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        on_request=drop_headers_after_submit,
+        query="SELECT 1",
+    )
+
+    assert run.result is None
+    assert run.requests == [("POST", SUBMIT_PATH)]
+    assert run.events[-1]["event_data"].startswith(
+        "Error: Your sign-in to this app could not be renewed. Try again in a moment."
+    )
+    assert run.errors == ["Your sign-in to this app could not be renewed. Try again in a moment."]
