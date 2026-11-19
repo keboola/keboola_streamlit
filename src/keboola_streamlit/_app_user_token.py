@@ -114,7 +114,9 @@ class _Refresher:
             now = _now()
             if now < self._expires_at - REFRESH_MARGIN_SECONDS:
                 return self._token
-            if not self._refused and now >= self._retry_at:
+            # apps-proxy never issues a token that outlives the refresh token, so a refresh would not help.
+            can_extend = self._expires_at < self.refresh_token_expires_at and now < self.refresh_token_expires_at
+            if can_extend and not self._refused and now >= self._retry_at:
                 self._refresh(now)
             if _now() < self._expires_at:
                 return self._token

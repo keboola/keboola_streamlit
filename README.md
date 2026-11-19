@@ -240,7 +240,8 @@ The token lives 5 minutes, and Streamlit sees only the headers of the page load.
 refresh token (`X-Kbc-App-User-Refresh-Token`) and the app's public URL (`X-Kbc-App-Public-Url`). Less than a minute
 before the token expires, the library gets a new one from `<public URL>/_proxy/app-user-token`. One call serves all
 queries of the session. The refresh token ends when the apps proxy closes the connection (at most after 1 hour).
-Streamlit then reconnects at once and gets a new pair.
+A token never outlives it, so in that last minute the library keeps the current token. Streamlit then reconnects at
+once and gets a new pair.
 
 When the proxy refuses the refresh (the user signed out or lost access), the current token is used until it expires.
 After that the app shows "Your sign-in to this app has expired. Reload the page." When the proxy is not reachable

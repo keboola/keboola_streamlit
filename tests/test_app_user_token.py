@@ -377,3 +377,39 @@ def test_app_user_key_does_not_refresh(clock, monkeypatch):
     get_app_user_key(headers())
 
     assert post.calls == []
+
+
+def test_a_token_capped_at_the_refresh_token_expiry_is_not_refreshed_again(clock, monkeypatch):
+    capped, response = refreshed(exp=NOW + 3600)
+    post = use_post(monkeypatch, response)
+    clock.now = NOW + 3550
+
+    assert get_app_user_token(headers()) == capped
+    clock.now = NOW + 3551
+    assert get_app_user_token(headers()) == capped
+    clock.now = NOW + 3599
+    assert get_app_user_token(headers()) == capped
+
+    assert len(post.calls) == 1
+
+
+def test_a_handshake_token_that_outlives_the_refresh_token_is_not_refreshed(clock, monkeypatch):
+    post = use_post(monkeypatch, FakeResponse(500))
+    short_refresh = jwt(exp=NOW + 280, jti="refresh-short")
+    clock.now = NOW + 250
+
+    assert get_app_user_token(headers(refresh_token=short_refresh)) == HANDSHAKE_TOKEN
+    assert post.calls == []
+
+
+def test_a_capped_token_that_expired_raises_without_a_refresh(clock, monkeypatch):
+    capped, response = refreshed(exp=NOW + 3600)
+    post = use_post(monkeypatch, response)
+    clock.now = NOW + 3550
+    get_app_user_token(headers())
+
+    clock.now = NOW + 3600
+    with pytest.raises(AppUserTokenError):
+        get_app_user_token(headers())
+
+    assert len(post.calls) == 1
