@@ -15,6 +15,11 @@ from keboola_streamlit import KeboolaStreamlit  # noqa: E402
 from keboola_streamlit import keboola_streamlit as module  # noqa: E402
 
 JOB_PATH = "/api/v1/queries/qs-job-1"
+SIGN_IN_ENDED = (
+    "Your sign-in to this app ended before the query finished. The query may still complete: reload the page and "
+    "check the result before you run it again."
+)
+NOT_CANCELLED = "The job could not be cancelled, so the query may still complete."
 SUBMIT_PATH = "/api/v1/branches/678/workspaces/12345/queries"
 
 
@@ -38,9 +43,14 @@ class FakeQueryService:
     def __init__(self, responses):
         self.responses = responses
         self.requests = []
+        self.headers = []
+        self.on_request = None
 
     def handle(self, request):
         self.requests.append((request.method, request.url.path))
+        self.headers.append(request.headers)
+        if self.on_request is not None:
+            self.on_request(request)
         response = self.responses[(request.method, request.url.path)]
         if isinstance(response, list):
             response = response.pop(0)
@@ -57,9 +67,12 @@ def run_query(monkeypatch, tmp_path):
     monkeypatch.setenv("BRANCH_ID", "678")
     module._QUERY_SERVICE_CLIENTS.clear()
 
-    def run(responses, **kwargs):
+    def run(responses, headers=None, on_request=None, query="UPDATE t SET a = 1", refresh=None, **kwargs):
         service = FakeQueryService(responses)
+        service.on_request = on_request
         app = KeboolaStreamlit(root_url="https://example.com", token="dummy_token")
+        app.set_dev_mockup_headers(headers if headers is not None else {})
+        run.app = app
         for retry_requests in (True, False):
             client = app._get_query_service_client(retry_requests=retry_requests)
             client._client = httpx.Client(
@@ -67,13 +80,31 @@ def run_query(monkeypatch, tmp_path):
             )
         with (
             patch("requests.post") as mock_post,
-            patch("streamlit.error"),
+            patch("streamlit.error") as mock_error,
             patch("time.sleep"),
         ):
-            mock_post.return_value.status_code = 201
-            result = app.query_service_execute_query("UPDATE t SET a = 1", **kwargs)
-        events = [call.kwargs["json"]["params"] for call in mock_post.call_args_list]
-        return SimpleNamespace(result=result, events=events, requests=service.requests)
+            event_response = SimpleNamespace(status_code=201, text="", raise_for_status=lambda: None)
+            refresh_posts = []
+
+            def post(url, **post_kwargs):
+                if url.endswith("/_proxy/app-user-token"):
+                    refresh_posts.append((url, post_kwargs))
+                    return refresh(url, **post_kwargs)
+                return event_response
+
+            mock_post.side_effect = post
+            result = app.query_service_execute_query(query, **kwargs)
+        event_calls = [call for call in mock_post.call_args_list if "json" in call.kwargs]
+        events = [call.kwargs["json"]["params"] for call in event_calls]
+        return SimpleNamespace(
+            result=result,
+            events=events,
+            requests=service.requests,
+            headers=service.headers,
+            event_posts=event_calls,
+            refresh_posts=refresh_posts,
+            errors=[call.args[0] for call in mock_error.call_args_list],
+        )
 
     yield run
     module._QUERY_SERVICE_CLIENTS.clear()
@@ -158,3 +189,268 @@ def test_polling_survives_an_outage_longer_than_the_sdk_retries(run_query):
 
     assert run.result == 0
     assert ("POST", f"{JOB_PATH}/cancel") not in run.requests
+
+
+USER_TOKEN = "user-token-1"
+RESULTS_PATH = f"{JOB_PATH}/stmt-1/results"
+RESULTS = {
+    "status": "completed",
+    "columns": [{"name": "A", "type": "TEXT", "nullable": True}],
+    "data": [["1"]],
+    "numberOfRows": 1,
+}
+
+
+def test_user_token_goes_with_every_request_of_a_read(run_query):
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+            ("GET", RESULTS_PATH): (200, RESULTS),
+        },
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        query="SELECT 1",
+    )
+
+    assert run.result["A"].tolist() == ["1"]
+    assert run.requests == [("POST", SUBMIT_PATH), ("GET", JOB_PATH), ("GET", RESULTS_PATH)]
+    for headers in run.headers:
+        assert headers["X-Kbc-App-User-Token"] == USER_TOKEN
+        assert headers["X-StorageAPI-Token"] == "dummy_token"
+
+
+def test_user_token_goes_with_the_cancel(run_query):
+    not_found = (404, {"exception": "Not found"})
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): not_found,
+            ("POST", f"{JOB_PATH}/cancel"): (200, {"queryJobId": "qs-job-1"}),
+        },
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        return_df=False,
+    )
+
+    assert run.result is None
+    assert ("POST", f"{JOB_PATH}/cancel") in run.requests
+    assert run.requests.count(("GET", JOB_PATH)) >= 2
+    for headers in run.headers:
+        assert headers["X-Kbc-App-User-Token"] == USER_TOKEN
+        assert headers["X-StorageAPI-Token"] == "dummy_token"
+
+
+def test_without_user_token_only_the_storage_token_is_sent(run_query):
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+        },
+        return_df=False,
+    )
+
+    assert run.result == 0
+    for headers in run.headers:
+        assert "X-Kbc-App-User-Token" not in headers
+        assert headers["X-StorageAPI-Token"] == "dummy_token"
+
+
+def test_user_token_is_read_before_every_request(run_query):
+    tokens = iter(["user-token-2", "user-token-3"])
+
+    def new_token_after_each_request(request):
+        run_query.app.dev_mockup_headers["X-Kbc-App-User-Token"] = next(tokens, "user-token-4")
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+            ("GET", RESULTS_PATH): (200, RESULTS),
+        },
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        on_request=new_token_after_each_request,
+        query="SELECT 1",
+    )
+
+    assert [headers["X-Kbc-App-User-Token"] for headers in run.headers] == [USER_TOKEN, "user-token-2", "user-token-3"]
+
+
+def test_row_level_security_refusal_is_not_retried(run_query, caplog):
+    refusal = (403, {"exception": "Row-level security does not allow this query", "exceptionId": "qs-1"})
+
+    run = run_query(
+        {("POST", SUBMIT_PATH): refusal},
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        query="SELECT 1",
+    )
+
+    assert run.result is None
+    assert run.requests == [("POST", SUBMIT_PATH)]
+    failed = run.events[-1]
+    assert failed["event_type"] == "keboola_data_app_query_service_query_failed"
+    assert failed["event_data"] == "Error: Row-level security does not allow this query (status: 403) [qs-1]"
+    assert run.errors == ["You have no access to this data."]
+    for post in run.event_posts:
+        assert USER_TOKEN not in repr(post)
+    assert USER_TOKEN not in caplog.text
+
+
+def test_row_level_security_error_is_not_a_temporary_error():
+    from keboola_query_service import QueryServiceError, RowLevelSecurityError
+
+    refusal = RowLevelSecurityError("Row-level security does not allow this query", status_code=403)
+
+    assert isinstance(refusal, QueryServiceError)
+    assert module._is_temporary_error(refusal) is False
+
+
+def _jwt(exp, jti):
+    import base64
+    import json
+
+    def part(data):
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+
+    return f"{part({'alg': 'ES256'})}.{part({'exp': exp, 'jti': jti, 'idp': 'idp', 'sub': 'user-1'})}.c2ln"
+
+
+@pytest.fixture
+def refresh_headers():
+    import time
+
+    from keboola_streamlit import _app_user_token
+
+    _app_user_token._REFRESHERS.clear()
+    now = time.time()
+    yield lambda expires_in: {
+        "X-Kbc-App-User-Token": _jwt(now + expires_in, "handshake"),
+        "X-Kbc-App-User-Refresh-Token": _jwt(now + 3600, "refresh"),
+        "X-Kbc-App-Public-Url": "https://app-1.hub.example.com",
+    }
+    _app_user_token._REFRESHERS.clear()
+
+
+def test_a_token_near_expiry_is_refreshed_before_the_query(run_query, refresh_headers):
+    import time
+
+    new_token = _jwt(time.time() + 300, "refreshed")
+    headers = refresh_headers(30)
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+            ("GET", RESULTS_PATH): (200, RESULTS),
+        },
+        headers=headers,
+        query="SELECT 1",
+        refresh=lambda url, **kwargs: SimpleNamespace(status_code=200, json=lambda: {"token": new_token}),
+    )
+
+    assert run.result["A"].tolist() == ["1"]
+    assert len(run.refresh_posts) == 1
+    url, kwargs = run.refresh_posts[0]
+    assert url == "https://app-1.hub.example.com/_proxy/app-user-token"
+    assert kwargs["headers"] == {"Authorization": f"Bearer {headers['X-Kbc-App-User-Refresh-Token']}"}
+    for request_headers in run.headers:
+        assert request_headers["X-Kbc-App-User-Token"] == new_token
+        assert request_headers["X-StorageAPI-Token"] == "dummy_token"
+
+
+def test_an_expired_sign_in_is_shown_and_no_query_is_sent(run_query, refresh_headers, caplog):
+    headers = refresh_headers(-1)
+
+    run = run_query(
+        {("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"})},
+        headers=headers,
+        query="SELECT 1",
+        refresh=lambda url, **kwargs: SimpleNamespace(status_code=401),
+    )
+
+    assert run.result is None
+    assert run.requests == []
+    assert len(run.refresh_posts) == 1
+    assert run.errors == ["Your sign-in to this app has expired. Reload the page."]
+    text = caplog.text + " ".join(repr(post) for post in run.event_posts)
+    for value in headers.values():
+        if value.startswith("ey"):
+            assert value not in text
+
+
+def test_a_sign_in_that_ends_during_a_query_fails_the_query(run_query, refresh_headers):
+    headers = refresh_headers(30)
+    answers = iter([SimpleNamespace(status_code=503)])
+
+    def expire_after_submit(request):
+        if request.method == "POST":
+            from keboola_streamlit import _app_user_token
+
+            refresher = _app_user_token._REFRESHERS[headers["X-Kbc-App-User-Refresh-Token"]]
+            refresher._expires_at = 0.0
+            refresher._retry_at = float("inf")
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+        },
+        headers=headers,
+        on_request=expire_after_submit,
+        query="SELECT 1",
+        refresh=lambda url, **kwargs: next(answers),
+    )
+
+    assert run.result is None
+    assert run.requests == [("POST", SUBMIT_PATH)]
+    assert run.events[-1]["event_type"] == "keboola_data_app_query_service_query_failed"
+    assert run.events[-1]["event_data"].startswith("Error: Your sign-in to this app could not be renewed.")
+    assert run.events[-1]["event_data"].endswith(NOT_CANCELLED)
+    assert run.errors == [SIGN_IN_ENDED]
+
+
+def test_sign_in_error_is_not_a_temporary_error():
+    from keboola_streamlit import AppUserTokenError
+
+    assert module._is_temporary_error(AppUserTokenError("expired")) is False
+
+
+def test_a_token_that_disappears_during_a_query_gives_a_clear_error(run_query):
+    def drop_headers_after_submit(request):
+        if request.method == "POST":
+            run_query.app.dev_mockup_headers.clear()
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+        },
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        on_request=drop_headers_after_submit,
+        query="SELECT 1",
+    )
+
+    assert run.result is None
+    assert run.requests == [("POST", SUBMIT_PATH)]
+    assert run.events[-1]["event_data"].startswith(
+        "Error: Your sign-in to this app could not be renewed. Try again in a moment."
+    )
+    assert run.events[-1]["event_data"].endswith(NOT_CANCELLED)
+    assert run.errors == [SIGN_IN_ENDED]
+
+
+def test_a_write_whose_token_ends_after_the_submit_warns_that_it_may_still_complete(run_query):
+    def drop_headers_after_submit(request):
+        if request.method == "POST":
+            run_query.app.dev_mockup_headers.clear()
+
+    run = run_query(
+        {("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"})},
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        on_request=drop_headers_after_submit,
+        return_df=False,
+    )
+
+    assert run.result is None
+    assert run.requests == [("POST", SUBMIT_PATH)]
+    assert run.errors == [SIGN_IN_ENDED]
+    assert "Try again" not in run.errors[0]
