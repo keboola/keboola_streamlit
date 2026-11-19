@@ -67,7 +67,11 @@ def run_query(monkeypatch, tmp_path):
     monkeypatch.setenv("BRANCH_ID", "678")
     module._QUERY_SERVICE_CLIENTS.clear()
 
-    def run(responses, headers=None, on_request=None, query="UPDATE t SET a = 1", refresh=None, **kwargs):
+    def run(
+        responses, headers=None, on_request=None, query="UPDATE t SET a = 1", refresh=None, manifest=None, **kwargs
+    ):
+        if manifest is not None:
+            (tmp_path / "manifest.json").write_text(manifest)
         service = FakeQueryService(responses)
         service.on_request = on_request
         app = KeboolaStreamlit(root_url="https://example.com", token="dummy_token")
@@ -454,3 +458,40 @@ def test_a_write_whose_token_ends_after_the_submit_warns_that_it_may_still_compl
     assert run.requests == [("POST", SUBMIT_PATH)]
     assert run.errors == [SIGN_IN_ENDED]
     assert "Try again" not in run.errors[0]
+
+
+GOVERNED_MANIFEST = '{"governed": true, "workspaceId": "12345"}'
+COMPLETED_READ = {
+    ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+    ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+    ("GET", RESULTS_PATH): (200, RESULTS),
+}
+
+
+def test_a_governed_workspace_without_a_signed_in_user_is_refused_before_query_service(run_query):
+    run = run_query(dict(COMPLETED_READ), manifest=GOVERNED_MANIFEST, query="SELECT 1")
+
+    assert run.result is None
+    assert run.requests == []
+    assert run.events == []
+    assert run.errors == ["This app's data needs a signed-in user."]
+
+
+def test_a_governed_workspace_with_a_signed_in_user_runs_the_query(run_query):
+    run = run_query(
+        dict(COMPLETED_READ),
+        manifest=GOVERNED_MANIFEST,
+        headers={"X-Kbc-App-User-Token": USER_TOKEN},
+        query="SELECT 1",
+    )
+
+    assert run.result["A"].tolist() == ["1"]
+    assert run.errors == []
+
+
+@pytest.mark.parametrize("manifest", ['{"governed": false, "workspaceId": "12345"}', '{"workspaceId": "12345"}'])
+def test_a_workspace_not_known_as_governed_runs_the_query_without_a_user(run_query, manifest):
+    run = run_query(dict(COMPLETED_READ), manifest=manifest, query="SELECT 1")
+
+    assert run.result["A"].tolist() == ["1"]
+    assert run.requests[0] == ("POST", SUBMIT_PATH)
