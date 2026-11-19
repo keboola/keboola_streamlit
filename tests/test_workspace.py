@@ -38,7 +38,7 @@ def test_governed_is_unknown_without_a_boolean_field(manifest, content):
     assert get_workspace() == Workspace(id="12345", governed=None)
 
 
-def test_workspace_id_env_is_ignored(manifest, monkeypatch):
+def test_manifest_wins_over_the_workspace_id_env(manifest, monkeypatch):
     manifest.write_text('{"workspaceId": "12345", "governed": true}')
     monkeypatch.setenv("WORKSPACE_ID", "999")
 
@@ -59,15 +59,26 @@ def test_manifest_is_read_again_on_every_call(manifest):
     assert get_workspace().governed is True
 
 
-@pytest.mark.parametrize("workspace_id_env", [None, "999"])
-def test_no_manifest_path_raises_even_with_workspace_id_env(monkeypatch, workspace_id_env):
+def test_workspace_comes_from_the_workspace_id_env_without_a_manifest_path(monkeypatch):
     monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
-    if workspace_id_env is None:
-        monkeypatch.delenv("WORKSPACE_ID", raising=False)
-    else:
-        monkeypatch.setenv("WORKSPACE_ID", workspace_id_env)
+    monkeypatch.setenv("WORKSPACE_ID", "999")
 
-    with pytest.raises(RuntimeError, match="KBC_WORKSPACE_MANIFEST_PATH is not set"):
+    assert get_workspace() == Workspace(id="999", governed=None)
+
+
+def test_no_manifest_and_no_workspace_id_env_raises(monkeypatch):
+    monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
+    monkeypatch.delenv("WORKSPACE_ID", raising=False)
+
+    with pytest.raises(RuntimeError, match="KBC_WORKSPACE_MANIFEST_PATH.*WORKSPACE_ID"):
+        get_workspace()
+
+
+def test_non_numeric_workspace_id_env_raises(monkeypatch):
+    monkeypatch.delenv("KBC_WORKSPACE_MANIFEST_PATH", raising=False)
+    monkeypatch.setenv("WORKSPACE_ID", "WORKSPACE_999")
+
+    with pytest.raises(RuntimeError, match="numeric"):
         get_workspace()
 
 
