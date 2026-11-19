@@ -62,7 +62,7 @@ def run_query(monkeypatch, tmp_path):
     monkeypatch.setenv("BRANCH_ID", "678")
     module._QUERY_SERVICE_CLIENTS.clear()
 
-    def run(responses, headers=None, on_request=None, query="UPDATE t SET a = 1", **kwargs):
+    def run(responses, headers=None, on_request=None, query="UPDATE t SET a = 1", refresh=None, **kwargs):
         service = FakeQueryService(responses)
         service.on_request = on_request
         app = KeboolaStreamlit(root_url="https://example.com", token="dummy_token")
@@ -78,15 +78,26 @@ def run_query(monkeypatch, tmp_path):
             patch("streamlit.error") as mock_error,
             patch("time.sleep"),
         ):
-            mock_post.return_value.status_code = 201
+            event_response = SimpleNamespace(status_code=201, text="", raise_for_status=lambda: None)
+            refresh_posts = []
+
+            def post(url, **post_kwargs):
+                if url.endswith("/_proxy/app-user-token"):
+                    refresh_posts.append((url, post_kwargs))
+                    return refresh(url, **post_kwargs)
+                return event_response
+
+            mock_post.side_effect = post
             result = app.query_service_execute_query(query, **kwargs)
-        events = [call.kwargs["json"]["params"] for call in mock_post.call_args_list]
+        event_calls = [call for call in mock_post.call_args_list if "json" in call.kwargs]
+        events = [call.kwargs["json"]["params"] for call in event_calls]
         return SimpleNamespace(
             result=result,
             events=events,
             requests=service.requests,
             headers=service.headers,
-            event_posts=mock_post.call_args_list,
+            event_posts=event_calls,
+            refresh_posts=refresh_posts,
             errors=[call.args[0] for call in mock_error.call_args_list],
         )
 
@@ -286,3 +297,112 @@ def test_row_level_security_error_is_not_a_temporary_error():
 
     assert isinstance(refusal, QueryServiceError)
     assert module._is_temporary_error(refusal) is False
+
+
+def _jwt(exp, jti):
+    import base64
+    import json
+
+    def part(data):
+        return base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip("=")
+
+    return f"{part({'alg': 'ES256'})}.{part({'exp': exp, 'jti': jti, 'idp': 'idp', 'sub': 'user-1'})}.c2ln"
+
+
+@pytest.fixture
+def refresh_headers():
+    import time
+
+    from keboola_streamlit import _app_user_token
+
+    _app_user_token._REFRESHERS.clear()
+    now = time.time()
+    yield lambda expires_in: {
+        "X-Kbc-App-User-Token": _jwt(now + expires_in, "handshake"),
+        "X-Kbc-App-User-Refresh-Token": _jwt(now + 3600, "refresh"),
+        "X-Kbc-App-Public-Url": "https://app-1.hub.example.com",
+    }
+    _app_user_token._REFRESHERS.clear()
+
+
+def test_a_token_near_expiry_is_refreshed_before_the_query(run_query, refresh_headers):
+    import time
+
+    new_token = _jwt(time.time() + 300, "refreshed")
+    headers = refresh_headers(30)
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+            ("GET", RESULTS_PATH): (200, RESULTS),
+        },
+        headers=headers,
+        query="SELECT 1",
+        refresh=lambda url, **kwargs: SimpleNamespace(status_code=200, json=lambda: {"token": new_token}),
+    )
+
+    assert run.result["A"].tolist() == ["1"]
+    assert len(run.refresh_posts) == 1
+    url, kwargs = run.refresh_posts[0]
+    assert url == "https://app-1.hub.example.com/_proxy/app-user-token"
+    assert kwargs["headers"] == {"Authorization": f"Bearer {headers['X-Kbc-App-User-Refresh-Token']}"}
+    for request_headers in run.headers:
+        assert request_headers["X-Kbc-App-User-Token"] == new_token
+        assert request_headers["X-StorageAPI-Token"] == "dummy_token"
+
+
+def test_an_expired_sign_in_is_shown_and_no_query_is_sent(run_query, refresh_headers, caplog):
+    headers = refresh_headers(-1)
+
+    run = run_query(
+        {("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"})},
+        headers=headers,
+        query="SELECT 1",
+        refresh=lambda url, **kwargs: SimpleNamespace(status_code=401),
+    )
+
+    assert run.result is None
+    assert run.requests == []
+    assert len(run.refresh_posts) == 1
+    assert run.errors == ["Your sign-in to this app has expired. Reload the page."]
+    text = caplog.text + " ".join(repr(post) for post in run.event_posts)
+    for value in headers.values():
+        if value.startswith("ey"):
+            assert value not in text
+
+
+def test_a_sign_in_that_ends_during_a_query_fails_the_query(run_query, refresh_headers):
+    headers = refresh_headers(30)
+    answers = iter([SimpleNamespace(status_code=503)])
+
+    def expire_after_submit(request):
+        if request.method == "POST":
+            from keboola_streamlit import _app_user_token
+
+            refresher = _app_user_token._REFRESHERS[headers["X-Kbc-App-User-Refresh-Token"]]
+            refresher._expires_at = 0.0
+            refresher._retry_at = float("inf")
+
+    run = run_query(
+        {
+            ("POST", SUBMIT_PATH): (201, {"queryJobId": "qs-job-1"}),
+            ("GET", JOB_PATH): (200, _job_status("completed", "completed")),
+        },
+        headers=headers,
+        on_request=expire_after_submit,
+        query="SELECT 1",
+        refresh=lambda url, **kwargs: next(answers),
+    )
+
+    assert run.result is None
+    assert run.requests == [("POST", SUBMIT_PATH)]
+    assert run.events[-1]["event_type"] == "keboola_data_app_query_service_query_failed"
+    assert run.events[-1]["event_data"].startswith("Error: Your sign-in to this app could not be renewed.")
+    assert run.errors == ["Your sign-in to this app could not be renewed. Try again in a moment."]
+
+
+def test_sign_in_error_is_not_a_temporary_error():
+    from keboola_streamlit import AppUserTokenError
+
+    assert module._is_temporary_error(AppUserTokenError("expired")) is False

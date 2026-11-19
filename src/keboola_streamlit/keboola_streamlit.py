@@ -16,6 +16,7 @@ import requests
 import streamlit as st
 from kbcstorage.client import Client
 
+from ._app_user_token import AppUserTokenError, get_app_user_token
 from ._query_service_types import QueryServiceColumn, query_result_to_dataframe
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ class KeboolaStreamlit:
             return st.context.headers
 
     def _get_app_user_token(self) -> Optional[str]:
-        return self._get_headers().get("X-Kbc-App-User-Token") or None
+        return get_app_user_token(self._get_headers())
 
     def _get_event_job_id(self, table_id: str, operation_name: str) -> Optional[int]:
         """
@@ -758,8 +759,9 @@ class KeboolaStreamlit:
 
         Every request of the query carries the user token of the signed-in user (X-Kbc-App-User-Token) with the app's
         Storage token, so a workspace governed by row-level security returns only that user's rows. Without the token,
-        only the Storage token is sent. A row-level security refusal is not retried. st.cache_data shares results
-        between all users: key a cached function by the user (see "Row-level security" in the README).
+        only the Storage token is sent. On a websocket the token is renewed through the apps proxy before it expires.
+        A row-level security refusal is not retried. st.cache_data shares results between all users: key a cached
+        function by the user (see "Row-level security" in the README).
 
         Query Service does not support bind parameters, so escape any user input before putting it into SQL.
 
@@ -1006,7 +1008,9 @@ class KeboolaStreamlit:
     @staticmethod
     def _show_query_service_error(error: Exception) -> None:
         logging.error(f"An error occurred while executing Query Service query: {error}")
-        if _is_row_level_security_refusal(error):
+        if isinstance(error, AppUserTokenError):
+            st.error(str(error))
+        elif _is_row_level_security_refusal(error):
             st.error(QUERY_SERVICE_NO_ACCESS)
         else:
             st.error(f"An error occurred while executing Query Service query: {error}")
