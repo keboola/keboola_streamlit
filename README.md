@@ -236,30 +236,29 @@ token is sent, and a governed workspace refuses the query.
 When row-level security refuses a query, the app shows "You have no access to this data." and the failed event holds
 the error. The refusal is not retried.
 
-The token lives 5 minutes, and Streamlit gets it once, when the page opens. A query sent later is refused until the
-user reloads the page.
+The token lives 5 minutes, and Streamlit sees only the headers of the page load. So the apps proxy also adds a
+refresh token (`X-Kbc-App-User-Refresh-Token`) and the app's public URL (`X-Kbc-App-Public-Url`). Less than a minute
+before the token expires, the library gets a new one from `<public URL>/_proxy/app-user-token`. One call serves all
+queries of the session. The refresh token ends when the apps proxy closes the connection (at most after 1 hour).
+Streamlit then reconnects at once and gets a new pair.
+
+When the proxy refuses the refresh (the user signed out or lost access), the current token is used until it expires.
+After that the app shows "Your sign-in to this app has expired. Reload the page." When the proxy is not reachable
+for a moment, the library tries again a few seconds later.
 
 **Key every cache per user.** `st.cache_data` is one cache for all users of the app, keyed only by the arguments. In
 a governed workspace it would give one user's rows to the next user. Pass the user as an argument whose name does not
-start with `_` (Streamlit leaves such arguments out of the key). Use the token's `idp` and `sub` claims, not the
-token itself, which changes on every page load:
+start with `_` (Streamlit leaves such arguments out of the key). `get_app_user_key()` returns the user as the
+token's `idp` and `sub` claims, which stay the same for every token of the user, or None without a token:
 
 ```python
-import base64
-import json
+from typing import Optional, Tuple
 
-
-def user_key() -> tuple:
-    token = st.context.headers.get("X-Kbc-App-User-Token")
-    if not token:
-        return ("no user",)
-    payload = token.split(".")[1]
-    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-    return (claims["idp"], claims["sub"])
+from keboola_streamlit import get_app_user_key
 
 
 @st.cache_data(ttl=300)
-def load_orders(user: tuple) -> pd.DataFrame:
+def load_orders(user: Optional[Tuple[str, str]]) -> pd.DataFrame:
     df = keboola.query_service_execute_query('SELECT * FROM "in.c-crm"."orders"')
     if df is None:
         # Streamlit does not cache an exception, so a failed query (e.g. an expired token) is not kept for 5 minutes.
@@ -267,8 +266,13 @@ def load_orders(user: tuple) -> pd.DataFrame:
     return df
 
 
-df = load_orders(user_key())
+df = load_orders(get_app_user_key())
 ```
+
+To call Query Service or another service yourself, use `get_app_user_token()`. It returns a valid token, refreshed
+when needed, or None without a token. Call it before every request, not once per page. It raises
+`AppUserTokenError` when the token has expired and no new one could be obtained. `get_app_user_key()` raises it when
+the token has no `idp` and `sub`.
 
 The app does not verify the token: the apps proxy is the only one that sets the header, and it drops copies sent by
 the browser.
