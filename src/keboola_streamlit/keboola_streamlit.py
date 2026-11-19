@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import json
 import logging
 import math
 import os
@@ -18,7 +17,7 @@ from kbcstorage.client import Client
 
 from ._app_user_token import SIGN_IN_NOT_RENEWED, AppUserTokenError, get_app_user_token
 from ._query_service_types import QueryServiceColumn, query_result_to_dataframe
-from ._workspace import NEEDS_SIGNED_IN_USER, get_workspace_governed
+from ._workspace import NEEDS_SIGNED_IN_USER, _is_ascii_number, get_workspace
 
 if TYPE_CHECKING:
     from keboola_query_service import Client as QueryServiceClient
@@ -728,26 +727,6 @@ class KeboolaStreamlit:
                 return service["url"]
         raise RuntimeError("QUERY_SERVICE_URL is not set and the Storage API index does not list the Query Service.")
 
-    def _read_workspace_id(self) -> str:
-        manifest_path = os.environ.get("KBC_WORKSPACE_MANIFEST_PATH")
-        if manifest_path:
-            with open(manifest_path, encoding="utf-8") as manifest_file:
-                workspace_id = json.load(manifest_file).get("workspaceId")
-            if not workspace_id:
-                raise RuntimeError(f"Workspace manifest {manifest_path} does not contain workspaceId.")
-            if not _is_ascii_number(str(workspace_id)):
-                raise RuntimeError(f"Workspace manifest {manifest_path} has a non-numeric workspaceId.")
-            return str(workspace_id)
-        workspace_id = os.environ.get("WORKSPACE_ID")
-        if not workspace_id:
-            raise RuntimeError(
-                "Neither KBC_WORKSPACE_MANIFEST_PATH nor WORKSPACE_ID is set. "
-                "Turn on Storage Access in the data app configuration."
-            )
-        if not _is_ascii_number(workspace_id):
-            raise RuntimeError(f"WORKSPACE_ID must be a numeric workspace ID, got '{workspace_id}'.")
-        return workspace_id
-
     def _get_branch_id(self) -> str:
         branch_id = self._require_env("BRANCH_ID")
         if not _is_ascii_number(branch_id):
@@ -805,8 +784,9 @@ class KeboolaStreamlit:
         ):
             raise ValueError(f"max_wait_time must be a positive number of seconds, got {max_wait_time!r}.")
         try:
-            workspace_id = self._read_workspace_id()
-            if get_workspace_governed() is True and self._get_app_user_token() is None:
+            workspace = get_workspace()
+            workspace_id = workspace.id
+            if workspace.governed is True and self._get_app_user_token() is None:
                 raise AppUserTokenError(NEEDS_SIGNED_IN_USER)
             branch_id = self._get_branch_id()
             client = self._get_query_service_client()
@@ -1036,10 +1016,6 @@ class KeboolaStreamlit:
             st.error(QUERY_SERVICE_NO_ACCESS)
         else:
             st.error(f"An error occurred while executing Query Service query: {error}")
-
-
-def _is_ascii_number(value: str) -> bool:
-    return re.fullmatch(r"[0-9]+", value) is not None
 
 
 def _state_name(state: Any) -> str:
