@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from dataclasses import dataclass
 from typing import Optional
+
+from ._utils import is_ascii_number
 
 NEEDS_SIGNED_IN_USER = "This app's data needs a signed-in user."
 
@@ -45,11 +46,7 @@ def get_workspace() -> Workspace:
     workspace_id = manifest.get("workspaceId") if isinstance(manifest, dict) else None
     if not workspace_id:
         raise RuntimeError(f"Workspace manifest {path} does not contain workspaceId.")
-    if not _is_ascii_number(str(workspace_id)):
+    if not is_ascii_number(str(workspace_id)):
         raise RuntimeError(f"Workspace manifest {path} has a non-numeric workspaceId.")
     governed = manifest.get("governed")
     return Workspace(id=str(workspace_id), governed=governed if isinstance(governed, bool) else None)
-
-
-def _is_ascii_number(value: str) -> bool:
-    return re.fullmatch(r"[0-9]+", value) is not None

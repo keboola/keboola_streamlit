@@ -17,7 +17,8 @@ from kbcstorage.client import Client
 
 from ._app_user_token import SIGN_IN_NOT_RENEWED, AppUserTokenError, get_app_user_token
 from ._query_service_types import QueryServiceColumn, query_result_to_dataframe
-from ._workspace import NEEDS_SIGNED_IN_USER, _is_ascii_number, get_workspace
+from ._utils import is_ascii_number
+from ._workspace import NEEDS_SIGNED_IN_USER, get_workspace
 
 if TYPE_CHECKING:
     from keboola_query_service import Client as QueryServiceClient
@@ -728,7 +729,7 @@ class KeboolaStreamlit:
 
     def _get_branch_id(self) -> str:
         branch_id = self._require_env("BRANCH_ID")
-        if not _is_ascii_number(branch_id):
+        if not is_ascii_number(branch_id):
             raise RuntimeError(f"Query Service needs a numeric branch ID, got '{branch_id}'.")
         return branch_id
 
