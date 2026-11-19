@@ -236,6 +236,13 @@ token is sent, and a governed workspace refuses the query.
 When row-level security refuses a query, the app shows "You have no access to this data." and the failed event holds
 the error. The refusal is not retried.
 
+`get_workspace_governed()` tells whether the app's workspace is governed by row-level or column-level security: True,
+False, or None when it is unknown (no workspace manifest, or a platform version without the `governed` field). It reads
+the workspace manifest (`KBC_WORKSPACE_MANIFEST_PATH`) on every call, because the platform can update it while the app
+runs. When the workspace is governed and the request has no user token, `query_service_execute_query` does not send the
+query and shows "This app's data needs a signed-in user." In every other case the query is sent, and Query Service
+decides.
+
 The token lives 5 minutes, and Streamlit sees only the headers of the page load. So the apps proxy also adds a
 refresh token (`X-Kbc-App-User-Refresh-Token`) and the app's public URL (`X-Kbc-App-Public-Url`). Less than a minute
 before the token expires, the library gets a new one from `<public URL>/_proxy/app-user-token`. One call serves all
