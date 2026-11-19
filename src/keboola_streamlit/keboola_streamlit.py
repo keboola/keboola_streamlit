@@ -18,6 +18,7 @@ from kbcstorage.client import Client
 
 from ._app_user_token import SIGN_IN_NOT_RENEWED, AppUserTokenError, get_app_user_token
 from ._query_service_types import QueryServiceColumn, query_result_to_dataframe
+from ._workspace import NEEDS_SIGNED_IN_USER, get_workspace_governed
 
 if TYPE_CHECKING:
     from keboola_query_service import Client as QueryServiceClient
@@ -805,6 +806,8 @@ class KeboolaStreamlit:
             raise ValueError(f"max_wait_time must be a positive number of seconds, got {max_wait_time!r}.")
         try:
             workspace_id = self._read_workspace_id()
+            if get_workspace_governed() is True and self._get_app_user_token() is None:
+                raise AppUserTokenError(NEEDS_SIGNED_IN_USER)
             branch_id = self._get_branch_id()
             client = self._get_query_service_client()
             # The SDK repeats a request after a 5xx or a timeout, which could run a write twice.
